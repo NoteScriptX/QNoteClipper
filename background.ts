@@ -2,6 +2,7 @@ import {
   broadcastFromExtension,
   CONTENT_OPEN_SIDEPANEL_WITH_ANNOTATION,
   CLIPPER_CREATE_TASK,
+  CLIPPER_CAPTURE_ANNOTATION_IMAGE,
   CLIPPER_GET_TASK_OPTIONS,
   CONTENT_ACTIVATE_DRAW_MODE,
   CONTENT_OPEN_SELECTION_CARD,
@@ -10,7 +11,7 @@ import {
   type ContentToBackgroundMessage
 } from "~utils/messaging"
 import { NSX_ANNOTATIONS_KEY, type NsXAnnotation } from "~utils/storage"
-import { getAuthState, startLoginFlow, loginWithPassword, logout as authLogout, getValidAccessToken } from "~utils/auth"
+import { getAuthState, loginWithPassword, logout as authLogout, getValidAccessToken } from "~utils/auth"
 import { patchSettings } from "~utils/settings"
 import { createTaskFromAnnotation, getQtableUsers, getQtables } from "~utils/api"
 
@@ -76,6 +77,7 @@ const createContextMenus = () => {
 
 chrome.runtime.onInstalled.addListener(createContextMenus)
 chrome.runtime.onStartup.addListener(createContextMenus)
+createContextMenus()
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (!tab?.id) return
   const message = info.menuItemId === "nsx-text"
@@ -89,8 +91,57 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 })
 
 chrome.runtime.onMessage.addListener(
-  (message: ContentToBackgroundMessage | OAuthMessage | ClipperCreateTaskMessage | { type: typeof CLIPPER_GET_TASK_OPTIONS }, sender, sendResponse) => {
+  (message: ContentToBackgroundMessage | OAuthMessage | ClipperCreateTaskMessage | { type: typeof CLIPPER_GET_TASK_OPTIONS } | { type: typeof CLIPPER_CAPTURE_ANNOTATION_IMAGE; rect: { left: number; top: number; width: number; height: number }; overlay?: { kind: "box"; rect: { left: number; top: number; width: number; height: number } } | { kind: "line"; points: { x: number; y: number }[] } }, sender, sendResponse) => {
     if (!message || typeof message !== "object") return
+
+    if (message.type === CLIPPER_CAPTURE_ANNOTATION_IMAGE) {
+      ;(async () => {
+        try {
+          if (!sender.tab?.windowId) throw new Error("无法定位当前页面")
+          const imageUrl = await chrome.tabs.captureVisibleTab(sender.tab.windowId, { format: "png" })
+          const source = await fetch(imageUrl).then((response) => response.blob())
+          const bitmap = await createImageBitmap(source)
+          const scaleX = bitmap.width / Math.max(1, sender.tab.width || bitmap.width)
+          const scaleY = bitmap.height / Math.max(1, sender.tab.height || bitmap.height)
+          const padding = 24
+          const left = Math.max(0, Math.floor((message.rect.left - padding) * scaleX))
+          const top = Math.max(0, Math.floor((message.rect.top - padding) * scaleY))
+          const right = Math.min(bitmap.width, Math.ceil((message.rect.left + message.rect.width + padding) * scaleX))
+          const bottom = Math.min(bitmap.height, Math.ceil((message.rect.top + message.rect.height + padding) * scaleY))
+          const cropWidth = Math.max(1, right - left)
+          const cropHeight = Math.max(1, bottom - top)
+          const ratio = Math.min(1, 1400 / Math.max(cropWidth, cropHeight))
+          const canvas = new OffscreenCanvas(Math.max(1, Math.round(cropWidth * ratio)), Math.max(1, Math.round(cropHeight * ratio)))
+          const context = canvas.getContext("2d")
+          context?.drawImage(bitmap, left, top, cropWidth, cropHeight, 0, 0, canvas.width, canvas.height)
+          if (context && message.overlay) {
+            const toCanvas = (point: { x: number; y: number }) => ({ x: (point.x * scaleX - left) * ratio, y: (point.y * scaleY - top) * ratio })
+            context.strokeStyle = message.overlay.kind === "line" ? "#ef4444" : "#4f46e5"
+            context.lineWidth = Math.max(2, 3 * ratio)
+            context.lineJoin = "round"
+            context.lineCap = "round"
+            if (message.overlay.kind === "box") {
+              const boxStart = toCanvas({ x: message.overlay.rect.left, y: message.overlay.rect.top })
+              context.strokeRect(boxStart.x, boxStart.y, message.overlay.rect.width * scaleX * ratio, message.overlay.rect.height * scaleY * ratio)
+            } else if (message.overlay.points.length > 1) {
+              const [first, ...rest] = message.overlay.points.map(toCanvas)
+              context.beginPath()
+              context.moveTo(first.x, first.y)
+              for (const point of rest) context.lineTo(point.x, point.y)
+              context.stroke()
+            }
+          }
+          const blob = await canvas.convertToBlob({ type: "image/png" })
+          const bytes = new Uint8Array(await blob.arrayBuffer())
+          let binary = ""
+          for (let offset = 0; offset < bytes.length; offset += 0x8000) binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
+          sendResponse({ ok: true, dataUrl: `data:image/png;base64,${btoa(binary)}` })
+        } catch (error) {
+          sendResponse({ ok: false, error: error instanceof Error ? error.message : "页面截图失败" })
+        }
+      })()
+      return true
+    }
 
     if (message.type === CLIPPER_GET_TASK_OPTIONS) {
       ;(async () => {
@@ -109,7 +160,7 @@ chrome.runtime.onMessage.addListener(
           const p = message.payload
           const task = await createTaskFromAnnotation({
             annotationId: p.annotationId,
-            task: { title: p.title, note: p.note, selected_text: p.selectedText, page_url: p.pageUrl, page_title: p.pageTitle, mode: p.mode, target_table_id: p.tableId, assignee_email: p.assigneeEmail, due_date: p.dueDate, include_context_url: p.includeContextUrl }
+            task: { title: p.title, note: p.note, selected_text: p.selectedText, page_url: p.pageUrl, page_title: p.pageTitle, mode: p.mode, target_table_id: p.tableId, assignee_email: p.assigneeEmail, due_date: p.dueDate, include_context_url: p.includeContextUrl, screenshot_data_url: p.screenshotDataUrl }
           })
           sendResponse({ ok: true, task })
         } catch (error) {
@@ -123,8 +174,8 @@ chrome.runtime.onMessage.addListener(
     if (message.type === OAUTH_START_LOGIN) {
       ;(async () => {
         try {
-          if (message.email && message.password) await loginWithPassword(message.email, message.password)
-          else await startLoginFlow()
+          if (!message.email || !message.password) throw new Error("请输入 QTable 账号和密码")
+          await loginWithPassword(message.email, message.password)
           // After successful login, update settings with user info
           const authState = await getAuthState()
           if (authState.isAuthenticated && authState.user) {
@@ -137,15 +188,18 @@ chrome.runtime.onMessage.addListener(
           }
           // Notify sidepanel to refresh
           chrome.runtime.sendMessage({ type: "AUTH_STATE_CHANGED" })
+          sendResponse({ ok: true })
         } catch (error) {
           console.error("OAuth login failed:", error)
+          const errorMessage = error instanceof Error ? error.message : "登录失败"
           chrome.runtime.sendMessage({
             type: "AUTH_ERROR",
-            error: error instanceof Error ? error.message : "Login failed"
+            error: errorMessage
           })
+          sendResponse({ ok: false, error: errorMessage })
         }
       })()
-      return
+      return true
     }
 
     if (message.type === OAUTH_LOGOUT) {

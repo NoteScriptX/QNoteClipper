@@ -7,9 +7,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnnotationCard } from "~components/AnnotationCard";
 import { Bubble } from "~components/Bubble";
 import { createFingerprintFromRange, createFingerprintFromSelection, getMergedClientRects, locateRangeFromFingerprint } from "~utils/anchor";
-import { CONTENT_OPEN_SIDEPANEL_WITH_ANNOTATION, sendToBackground, STORAGE_UPDATED } from "~utils/messaging";
-import { getAnnotationsByUrl, NSX_ANNOTATIONS_KEY, upsertAnnotation, type AnnotationMode, type NsXAnnotation } from "~utils/storage";
-import { getSettings } from "~utils/settings";
+import { CLIPPER_CAPTURE_ANNOTATION_IMAGE, CLIPPER_CREATE_TASK, CLIPPER_GET_TASK_OPTIONS, CONTENT_ACTIVATE_DRAW_MODE, CONTENT_OPEN_SELECTION_CARD, requestFromBackground, STORAGE_UPDATED } from "~utils/messaging";
+import { getAnnotationsByUrl, NSX_ANNOTATIONS_KEY, updateAnnotationById, upsertAnnotation, type AnnotationMode, type NsXAnnotation } from "~utils/storage";
+import type { QTable, QTableUser } from "~utils/api";
 
 
 
@@ -59,6 +59,7 @@ type DraftAnnotation = {
   mode: AnnotationMode
   box?: { left: number; top: number; width: number; height: number }
   line?: { x: number; y: number }[]
+  screenshotDataUrl?: string
 }
 
 type Box = { left: number; top: number; width: number; height: number }
@@ -215,11 +216,17 @@ export default function Content() {
   const rafRef = useRef<number | null>(null)
   const ephemeralTimerRef = useRef<number | null>(null)
   const ephemeralRectsRef = useRef<DOMRect[]>([])
-  const modeRef = useRef<AnnotationMode>("highlight")
+  const drawModeRef = useRef<"line" | "box" | null>(null)
   const boxStartRef = useRef<{ x: number; y: number } | null>(null)
   const linePointsRef = useRef<{ x: number; y: number }[] | null>(null)
+  const [taskOptions, setTaskOptions] = useState<{ tables: QTable[]; users: QTableUser[]; error?: string; loading: boolean }>({ tables: [], users: [], loading: false })
 
   const url = useMemo(() => window.location.href, [])
+
+  const captureAnnotationImage = useCallback(async (rect: Box, overlay?: { kind: "box"; rect: Box } | { kind: "line"; points: { x: number; y: number }[] }): Promise<string | undefined> => {
+    const response = await requestFromBackground<{ ok: boolean; dataUrl?: string }>({ type: CLIPPER_CAPTURE_ANNOTATION_IMAGE, rect, overlay })
+    return response.ok ? response.dataUrl : undefined
+  }, [])
 
   const refreshHighlights = useCallback(async () => {
     try {
@@ -263,20 +270,6 @@ export default function Content() {
   }, [card.visible, refreshHighlights])
 
   useEffect(() => {
-    const loadMode = async () => {
-      modeRef.current = (await getSettings()).annotationMode
-    }
-    loadMode()
-    const listener = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
-      if (area !== "local") return
-      const next = changes["nsx_settings_v1"]?.newValue as { annotationMode?: AnnotationMode } | undefined
-      if (next?.annotationMode) modeRef.current = next.annotationMode
-    }
-    chrome.storage.onChanged.addListener(listener)
-    return () => chrome.storage.onChanged.removeListener(listener)
-  }, [])
-
-  useEffect(() => {
     const listener = (message: any) => {
       if (message?.type !== STORAGE_UPDATED) return
       const p = message.payload
@@ -287,6 +280,14 @@ export default function Content() {
     chrome.runtime.onMessage.addListener(listener)
     return () => chrome.runtime.onMessage.removeListener(listener)
   }, [refreshHighlights, url])
+
+  useEffect(() => {
+    if (!card.visible) return
+    setTaskOptions((previous) => ({ ...previous, loading: true, error: undefined }))
+    requestFromBackground<{ ok: boolean; tables?: QTable[]; users?: QTableUser[]; error?: string }>({ type: CLIPPER_GET_TASK_OPTIONS })
+      .then((response) => setTaskOptions(response.ok ? { tables: response.tables ?? [], users: response.users ?? [], loading: false } : { tables: [], users: [], loading: false, error: response.error || "请先登录 QTable" }))
+      .catch(() => setTaskOptions({ tables: [], users: [], loading: false, error: "无法连接 QTable" }))
+  }, [card.visible])
 
   useEffect(() => {
     const isInCsui = (e: MouseEvent) => {
@@ -300,33 +301,43 @@ export default function Content() {
       })
     }
 
-    const onMouseUp = (e: MouseEvent) => {
+    const onMouseUp = async (e: MouseEvent) => {
       if (card.visible) return
       if (isInCsui(e)) return
       if (boxStartRef.current) {
+        e.preventDefault()
         const start = boxStartRef.current
         boxStartRef.current = null
         const box = normalizeBox(start, { x: e.clientX, y: e.clientY })
-        setBoxPreview(null)
-        if (box.width < 12 || box.height < 12) return
+        drawModeRef.current = null
+        document.documentElement.style.cursor = ""
+        if (box.width < 12 || box.height < 12) {
+          setBoxPreview(null)
+          return
+        }
         const captured = getTextAndRangeInBox(box)
-        if (!captured.text || !captured.range) return
-        const fingerprint = createFingerprintFromRange(captured.range)
-        if (!fingerprint) return
+        const fingerprint = captured.range ? createFingerprintFromRange(captured.range) : null
         const docBox = { left: box.left + window.scrollX, top: box.top + window.scrollY, width: box.width, height: box.height }
+        const screenshotDataUrl = await captureAnnotationImage(box, { kind: "box", rect: box }).catch(() => undefined)
+        setBoxPreview(null)
         const draft: DraftAnnotation = {
           id: genId(), url, pageTitle: document.title || "", createdAt: Date.now(),
-          selectedText: captured.text, anchor: fingerprint, locateStatus: "ok", mode: "box", box: docBox
+          selectedText: captured.text || "页面框选", anchor: fingerprint || { selectedText: captured.text || "页面框选", xpath: "", prefix: "", suffix: "", context: "" }, locateStatus: "ok", mode: "box", box: docBox, screenshotDataUrl
         }
         const cardPos = computeCardPositionFromBubble({ x: box.left, y: box.top })
         setCard({ visible: true, x: cardPos.x, y: cardPos.y, arrowSide: cardPos.arrowSide, draft })
         return
       }
       if (linePointsRef.current) {
+        e.preventDefault()
         const points = linePointsRef.current
         linePointsRef.current = null
-        setLinePreview(null)
-        if (points.length < 2) return
+        drawModeRef.current = null
+        document.documentElement.style.cursor = ""
+        if (points.length < 2) {
+          setLinePreview(null)
+          return
+        }
         const bounds = {
           left: Math.min(...points.map((point) => point.x)),
           top: Math.min(...points.map((point) => point.y)),
@@ -335,11 +346,13 @@ export default function Content() {
         }
         const captured = getTextAndRangeInBox(bounds)
         const fingerprint = captured.range ? createFingerprintFromRange(captured.range) : null
+        const screenshotDataUrl = await captureAnnotationImage(bounds, { kind: "line", points }).catch(() => undefined)
+        setLinePreview(null)
         const draft: DraftAnnotation = {
           id: genId(), url, pageTitle: document.title || "", createdAt: Date.now(),
           selectedText: captured.text || "手绘划线", anchor: fingerprint || { selectedText: captured.text || "手绘划线", xpath: "", prefix: "", suffix: "", context: "" },
           locateStatus: "ok", mode: "line",
-          line: points.map((point) => ({ x: point.x + window.scrollX, y: point.y + window.scrollY }))
+          line: points.map((point) => ({ x: point.x + window.scrollX, y: point.y + window.scrollY })), screenshotDataUrl
         }
         const cardPos = computeCardPositionFromBubble({ x: points[0].x, y: points[0].y })
         setCard({ visible: true, x: cardPos.x, y: cardPos.y, arrowSide: cardPos.arrowSide, draft })
@@ -381,12 +394,14 @@ export default function Content() {
       if (isInCsui(e)) {
         return
       }
-      if (modeRef.current === "box") {
+      if (drawModeRef.current === "box") {
+        e.preventDefault()
         boxStartRef.current = { x: e.clientX, y: e.clientY }
         setBoxPreview({ left: e.clientX, top: e.clientY, width: 0, height: 0 })
         return
       }
-      if (modeRef.current === "line") {
+      if (drawModeRef.current === "line") {
+        e.preventDefault()
         linePointsRef.current = [{ x: e.clientX, y: e.clientY }]
         setLinePreview(linePointsRef.current)
         return
@@ -413,6 +428,7 @@ export default function Content() {
     document.addEventListener("mouseup", onMouseUp, true)
     document.addEventListener("mousedown", onMouseDown, true)
     const onMouseMove = (e: MouseEvent) => {
+      if (boxStartRef.current || linePointsRef.current) e.preventDefault()
       const start = boxStartRef.current
       if (start) setBoxPreview(normalizeBox(start, { x: e.clientX, y: e.clientY }))
       const line = linePointsRef.current
@@ -437,7 +453,7 @@ export default function Content() {
         ephemeralTimerRef.current = null
       }
     }
-  }, [card.visible, refreshHighlights])
+  }, [card.visible, captureAnnotationImage, refreshHighlights])
 
   const onBubbleClick = useCallback(async () => {
     const selection = window.getSelection()
@@ -455,9 +471,13 @@ export default function Content() {
       window.clearTimeout(ephemeralTimerRef.current)
       ephemeralTimerRef.current = null
     }
+    const selectionRect = getSelectionRect(selection)
+    const fallbackBubble = selectionRect ? computeBubblePosition(selectionRect) : null
     const pos = bubble.visible
       ? computeCardPositionFromBubble({ x: bubble.x, y: bubble.y })
-      : { x: 12, y: 12, arrowSide: "left" as const }
+      : fallbackBubble
+        ? computeCardPositionFromBubble(fallbackBubble)
+        : { x: 12, y: 12, arrowSide: "left" as const }
     const draft: DraftAnnotation = {
       id: genId(),
       url,
@@ -471,7 +491,7 @@ export default function Content() {
         context: fp.context
       },
       locateStatus: "ok",
-      mode: modeRef.current
+      mode: "highlight"
     }
 
     selection.removeAllRanges()
@@ -483,6 +503,38 @@ export default function Content() {
       draft
     })
   }, [bubble, url])
+
+  useEffect(() => {
+    const listener = (message: { type?: string; mode?: "line" | "box" }) => {
+      if (message.type === CONTENT_OPEN_SELECTION_CARD) {
+        void onBubbleClick()
+        return
+      }
+      if (message.type === CONTENT_ACTIVATE_DRAW_MODE && message.mode) {
+        setBubble({ visible: false })
+        setCard({ visible: false })
+        window.getSelection()?.removeAllRanges()
+        drawModeRef.current = message.mode
+        document.documentElement.style.cursor = message.mode === "line" ? "crosshair" : "cell"
+      }
+    }
+    chrome.runtime.onMessage.addListener(listener)
+    return () => chrome.runtime.onMessage.removeListener(listener)
+  }, [onBubbleClick])
+
+  useEffect(() => {
+    const cancelDrawing = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || !drawModeRef.current) return
+      drawModeRef.current = null
+      boxStartRef.current = null
+      linePointsRef.current = null
+      setBoxPreview(null)
+      setLinePreview(null)
+      document.documentElement.style.cursor = ""
+    }
+    window.addEventListener("keydown", cancelDrawing, true)
+    return () => window.removeEventListener("keydown", cancelDrawing, true)
+  }, [])
 
   const saveDraft = useCallback(
     async (draft: DraftAnnotation, input: { title: string; note: string }) => {
@@ -559,24 +611,38 @@ export default function Content() {
       {card.visible ? (
         <AnnotationCard
           initialNote=""
-          onClose={() => setCard({ visible: false })}
+          hasScreenshot={Boolean(card.draft.screenshotDataUrl)}
+          onClose={() => {
+            drawModeRef.current = null
+            document.documentElement.style.cursor = ""
+            setCard({ visible: false })
+          }}
+          taskOptions={taskOptions}
           onCreateTask={async (input) => {
             const draft = card.draft
             await saveDraft(draft, input)
-            try {
-              await sendToBackground({
-                type: CONTENT_OPEN_SIDEPANEL_WITH_ANNOTATION,
-                payload: {
-                  annotationId: draft.id,
-                  url: draft.url,
-                  selectedText: draft.selectedText,
-                  title: input.title.trim(),
-                  mode: draft.mode
-                }
-              })
-            } catch {
-              // ignore
-            }
+            const response = await requestFromBackground<{ ok: boolean; task?: { task_id: string; qtable_url: string }; error?: string }>({
+              type: CLIPPER_CREATE_TASK,
+              payload: {
+                annotationId: draft.id,
+                title: input.title,
+                note: input.note,
+                selectedText: draft.selectedText,
+                pageUrl: draft.url,
+                pageTitle: draft.pageTitle,
+                mode: draft.mode,
+                tableId: input.tableId,
+                assigneeEmail: input.assigneeEmail,
+                dueDate: input.dueDate,
+                includeContextUrl: input.includeContextUrl,
+                screenshotDataUrl: draft.screenshotDataUrl
+              }
+            })
+            if (!response.ok || !response.task) throw new Error(response.error || "创建任务失败")
+            await updateAnnotationById(draft.id, (annotation) => ({
+              ...annotation,
+              task: { status: "created", taskId: response.task!.task_id, qtableUrl: response.task!.qtable_url }
+            }))
           }}
           onSave={async (input) => {
             const draft = card.draft

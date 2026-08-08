@@ -16,7 +16,7 @@ export const getSettings = async (): Promise<NsXSettings> => {
   const base: NsXSettings = {
     loggedIn: false,
     apiEndpoint: "http://localhost:9000",
-    defaultTableId: "tbl_123456",
+    defaultTableId: "",
     userEmail: undefined,
     userName: undefined,
     userAvatar: undefined,

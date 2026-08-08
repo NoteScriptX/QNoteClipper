@@ -85,6 +85,7 @@ export type CreateTaskFromAnnotationInput = {
     page_url?: string
     page_title?: string
     mode?: "highlight" | "line" | "box" | "underline"
+    screenshot_data_url?: string
   }
 }
 
@@ -175,6 +176,7 @@ export const createTaskFromAnnotation = async (
       page_url: input.task.page_url ?? "",
       page_title: input.task.page_title ?? "",
       mode: input.task.mode ?? "highlight",
+      screenshot_data_url: input.task.screenshot_data_url,
       target_table_id: tableId,
       assignee_email: assigneeEmail || undefined,
       due_date: dueDate || undefined,

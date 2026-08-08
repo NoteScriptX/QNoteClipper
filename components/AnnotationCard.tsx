@@ -12,6 +12,7 @@ type Props = {
   selectedText: string
   pageTitle?: string
   initialNote?: string
+  hasScreenshot?: boolean
   onClose: () => void
   onSave: (input: { title: string; note: string }) => Promise<void> | void
   taskOptions?: { tables: QTable[]; users: QTableUser[]; error?: string; loading: boolean }
@@ -28,12 +29,12 @@ export function AnnotationCard({
   selectedText,
   pageTitle,
   initialNote,
+  hasScreenshot = false,
   onClose,
   onSave,
   taskOptions,
   onCreateTask
 }: Props) {
-  const [title, setTitle] = useState("")
   const [note, setNote] = useState(initialNote ?? "")
   const [isSaving, setIsSaving] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
@@ -52,7 +53,7 @@ export function AnnotationCard({
   const cardWidth = 420
   const padding = 12
   const left = clamp(x, padding, window.innerWidth - cardWidth - padding)
-  const top = clamp(y, padding, window.innerHeight - 620 - padding)
+  const top = clamp(y, padding, window.innerHeight - 540 - padding)
   const tables = taskOptions?.tables ?? []
   const activeTableId = tableId || tables[0]?.id || ""
 
@@ -73,7 +74,7 @@ export function AnnotationCard({
         }`}
       />
 
-      <div className="max-h-[430px] overflow-auto p-4">
+      <div className="p-4">
         <div className="rounded-lg border border-slate-100 bg-gradient-to-b from-slate-50 to-white p-2.5">
           <div className="flex items-start gap-2">
             <div className="mt-0.5 text-slate-400">“</div>
@@ -103,9 +104,9 @@ export function AnnotationCard({
               if (!e.ctrlKey) return
               if (e.key !== "Enter") return
               e.preventDefault()
-              if (isSaving || isCreating || !title.trim()) return
+              if (isSaving || isCreating || !note.trim()) return
               setIsSaving(true)
-              Promise.resolve(onSave({ title, note }))
+              Promise.resolve(onSave({ title: note.trim(), note: note.trim() }))
                 .then(() => {
                   setSavedFlash(true)
                   setTimeout(() => onClose(), 260)
@@ -114,20 +115,13 @@ export function AnnotationCard({
                   setTimeout(() => setIsSaving(false), 260)
                 })
             }}
-            placeholder="输入批注（纯文本）"
+            placeholder="批注内容（必填，也将作为任务标题）"
             value={note}
           />
           <div className="mt-1.5 text-[11px] text-slate-400">
             提示：按 Ctrl + Enter 可快速保存
           </div>
         </div>
-
-        <input
-          className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-indigo-400"
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="批注标题（必填）"
-          value={title}
-        />
 
         <div className="mt-3 grid grid-cols-2 gap-2">
           <label className="block text-xs font-medium text-slate-600">
@@ -150,7 +144,7 @@ export function AnnotationCard({
               value={assigneeEmail}
             />
             <datalist id={`nsx-users-${Math.round(x)}-${Math.round(y)}`}>
-              {(taskOptions?.users ?? []).map((user) => <option key={user.id} value={user.email}>{user.name}</option>)}
+              {(taskOptions?.users ?? []).map((user) => <option key={user.id} label={user.name} value={user.email}>{user.name}</option>)}
             </datalist>
           </label>
           <label className="block text-xs font-medium text-slate-600">
@@ -171,15 +165,16 @@ export function AnnotationCard({
         </div>
         {taskOptions?.error ? <div className="mt-2 text-xs text-rose-600">{taskOptions.error}</div> : null}
         {taskError ? <div className="mt-2 text-xs text-rose-600">{taskError}</div> : null}
+        {hasScreenshot ? <div className="mt-2 text-xs text-slate-500">已附上当前绘制区域截图，创建任务后会保存到 QTable 附件。</div> : null}
 
         <div className="mt-3.5 grid grid-cols-2 gap-2.5">
           <button
             className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 active:bg-slate-100 disabled:opacity-60"
-            disabled={isSaving || isCreating || !title.trim() || !activeTableId || taskOptions?.loading}
+            disabled={isSaving || isCreating || !note.trim()}
             onClick={async () => {
               setIsSaving(true)
               try {
-                await onSave({ title, note })
+                await onSave({ title: note.trim(), note: note.trim() })
                 setSavedFlash(true)
                 setTimeout(() => onClose(), 260)
               } finally {
@@ -191,12 +186,12 @@ export function AnnotationCard({
           </button>
           <button
             className="rounded-lg bg-indigo-600 px-3 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-indigo-500 active:bg-indigo-700 disabled:opacity-60"
-            disabled={isSaving || isCreating || !title.trim()}
+            disabled={isSaving || isCreating || !note.trim() || !activeTableId || taskOptions?.loading}
             onClick={async () => {
               setIsCreating(true)
               try {
                 setTaskError(null)
-                await onCreateTask({ title, note, tableId: activeTableId, assigneeEmail: assigneeEmail.trim() || undefined, dueDate: dueDate || undefined, includeContextUrl })
+                await onCreateTask({ title: note.trim(), note: note.trim(), tableId: activeTableId, assigneeEmail: assigneeEmail.trim() || undefined, dueDate: dueDate || undefined, includeContextUrl })
                 onClose()
               } catch (error) {
                 setTaskError(error instanceof Error ? error.message : "创建任务失败")
@@ -205,7 +200,7 @@ export function AnnotationCard({
               }
             }}
             type="button">
-            {isCreating ? "打开中…" : "保存并创建任务"}
+            {isCreating ? "创建中…" : "保存并创建任务"}
           </button>
         </div>
       </div>

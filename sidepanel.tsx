@@ -61,7 +61,10 @@ export default function SidePanel() {
   const [success, setSuccess] = useState<string | null>(null)
   const [pageCollapsed, setPageCollapsed] = useState(false)
   const [isLoggingIn, setIsLoggingIn] = useState(false)
+  const [loginEmail, setLoginEmail] = useState("")
+  const [loginPassword, setLoginPassword] = useState("")
   const successTimerRef = useRef<number | null>(null)
+  const isLoggedIn = settings?.loggedIn === true
 
   const pendingText = pending?.selectedText ?? ""
   const domain = useMemo(
@@ -81,9 +84,10 @@ export default function SidePanel() {
 
       const st = await getSettings()
       if (!authState.isAuthenticated) {
-        setSettings({ ...st, loggedIn: false })
+        setSettings({ ...st, loggedIn: false, defaultTableId: "" })
         setQtables([])
         setItems([])
+        setActiveTab("settings")
         return
       }
 
@@ -91,7 +95,10 @@ export default function SidePanel() {
       setQtables(qts)
       setQtableUsers(await getQtableUsers())
 
-      setSettings(st)
+      const validDefaultTableId = qts.some((table) => table.id === st.defaultTableId) ? st.defaultTableId : ""
+      if (validDefaultTableId !== st.defaultTableId) await patchSettings({ defaultTableId: validDefaultTableId })
+      setSettings({ ...st, loggedIn: true, defaultTableId: validDefaultTableId, userEmail: authState.user?.email ?? st.userEmail, userName: authState.user?.name ?? st.userName, userAvatar: authState.user?.avatar_url ?? st.userAvatar })
+      setActiveTab("annotations")
 
       const annotations = await getAnnotationsByUrl(info.url)
       const nextItems: AnnotationPreview[] = annotations.map((a) => ({
@@ -124,6 +131,27 @@ export default function SidePanel() {
       setIsRefreshing(false)
     }
   }, [])
+
+  const handleLogin = async () => {
+    const email = loginEmail.trim()
+    if (!email || !loginPassword) {
+      setError("请输入 QTable 邮箱和密码")
+      return
+    }
+    setIsLoggingIn(true)
+    setError(null)
+    try {
+      const response = await chrome.runtime.sendMessage({ type: "OAUTH_START_LOGIN", email, password: loginPassword })
+      if (!response?.ok) throw new Error(response?.error || "登录失败")
+      setLoginPassword("")
+      setSuccess("登录成功，正在加载你的数据表…")
+      await refresh()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "登录失败")
+    } finally {
+      setIsLoggingIn(false)
+    }
+  }
 
   useEffect(() => {
     refresh()
@@ -181,7 +209,7 @@ export default function SidePanel() {
     const listener = (message: BackgroundBroadcastMessage) => {
       if (message?.type === CONTENT_OPEN_SIDEPANEL_WITH_ANNOTATION) {
         setPending(message.payload)
-        if (settings?.loggedIn !== false) setTaskDialogOpen(true)
+        if (isLoggedIn) setTaskDialogOpen(true)
         else setActiveTab("settings")
         return
       }
@@ -195,7 +223,7 @@ export default function SidePanel() {
     }
     chrome.runtime.onMessage.addListener(listener)
     return () => chrome.runtime.onMessage.removeListener(listener)
-  }, [pageInfo.url, refresh, settings?.loggedIn])
+  }, [pageInfo.url, refresh, isLoggedIn])
 
   return (
     <div className="min-h-screen bg-slate-50 pb-14 text-slate-900">
@@ -245,15 +273,15 @@ export default function SidePanel() {
 
         <button
           className={`w-full border-t border-slate-200 px-3 py-2 text-left ${
-            settings?.loggedIn === false
-              ? "bg-rose-50 text-rose-900"
+            !isLoggedIn
+              ? "bg-amber-50 text-amber-950"
               : "bg-white text-slate-900"
           }`}
           onClick={() => setPageCollapsed((v) => !v)}
           type="button">
           <div className="flex items-center gap-2">
-            {settings?.loggedIn === false ? (
-              <div className="text-sm font-semibold">请登录</div>
+            {!isLoggedIn ? (
+              <div className="text-sm font-semibold">登录 QTable 后开始批注</div>
             ) : (
               <>
                 {pageInfo.faviconUrl ? (
@@ -279,9 +307,9 @@ export default function SidePanel() {
             )}
             <div className="text-slate-400">{pageCollapsed ? "▸" : "▾"}</div>
           </div>
-          {settings?.loggedIn === false ? (
-            <div className="mt-1 text-xs text-rose-700">
-              登录已过期，Clipper 暂时停止工作
+          {!isLoggedIn ? (
+            <div className="mt-1 text-xs text-amber-800">
+              未登录：暂不加载数据表，也不能创建任务
             </div>
           ) : null}
         </button>
@@ -359,7 +387,7 @@ export default function SidePanel() {
                     selectedText: it.selectedText,
                     title: it.title
                   })
-                  if (settings?.loggedIn === false) {
+                  if (!isLoggedIn) {
                     setActiveTab("settings")
                     return
                   }
@@ -371,7 +399,7 @@ export default function SidePanel() {
         ) : (
           <div className="rounded border border-slate-200 bg-white p-3">
             <div className="text-sm font-semibold text-slate-900">
-              设置（MVP）
+              设置与账户
             </div>
             <div className="mt-3 space-y-3">
               <div>
@@ -391,33 +419,20 @@ export default function SidePanel() {
                 />
               </div>
               <div>
-                <div className="text-xs font-medium text-slate-500">批注方式</div>
-                <select
-                  className="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 text-sm outline-none focus:border-slate-400"
-                  onChange={async (e) => {
-                    const next = await patchSettings({ annotationMode: e.target.value as NsXSettings["annotationMode"] })
-                    setSettings(next)
-                  }}
-                  value={settings?.annotationMode ?? "highlight"}>
-                  <option value="highlight">文字高亮批注</option>
-                  <option value="line">手绘划线批注</option>
-                  <option value="box">框选批注</option>
-                </select>
-                <div className="mt-1 text-xs text-slate-400">手绘划线：在网页上按住鼠标拖动；框选：拖拽出矩形区域。</div>
-              </div>
-              <div>
                 <div className="text-xs font-medium text-slate-500">
-                  默认表格
+                  默认目标数据表
                 </div>
                 <select
-                  className="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 text-sm outline-none focus:border-slate-400"
+                  className="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 text-sm outline-none focus:border-slate-400 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                  disabled={!isLoggedIn || qtables.length === 0}
                   onChange={async (e) => {
                     const next = await patchSettings({
                       defaultTableId: e.target.value
                     })
                     setSettings(next)
                   }}
-                  value={settings?.defaultTableId ?? qtables[0]?.id ?? ""}>
+                  value={settings?.defaultTableId ?? ""}>
+                  <option value="">请选择默认数据表</option>
                   {qtables.map((t) => (
                     <option key={t.id} value={t.id}>
                       {(t.emoji ? `${t.emoji} ` : "") + t.name} ({t.row_count})
@@ -452,7 +467,7 @@ export default function SidePanel() {
                     <div className="text-xs text-slate-500">未登录</div>
                   )}
                 </div>
-                {settings?.loggedIn ? (
+                {isLoggedIn ? (
                   <button
                     className="rounded border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
                     onClick={async () => {
@@ -461,6 +476,7 @@ export default function SidePanel() {
                         await chrome.runtime.sendMessage({ type: "OAUTH_LOGOUT" })
                         await patchSettings({
                           loggedIn: false,
+                          defaultTableId: "",
                           userEmail: undefined,
                           userName: undefined,
                           userAvatar: undefined
@@ -474,59 +490,27 @@ export default function SidePanel() {
                     type="button">
                     退出登录
                   </button>
-                ) : (
-                  <button
-                    className="rounded border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                    disabled={isLoggingIn}
-                    onClick={async () => {
-                      try {
-                        setIsLoggingIn(true)
-                        setError(null)
-                        const email = window.prompt("QTable 邮箱")?.trim()
-                        const password = window.prompt("QTable 密码")
-                        if (!email || !password) throw new Error("已取消登录")
-                        await chrome.runtime.sendMessage({ type: "OAUTH_START_LOGIN", email, password })
-                        // The background script will handle the OAuth flow
-                        // and send AUTH_STATE_CHANGED message when done
-                      } catch (err) {
-                        setError("启动登录失败")
-                        setIsLoggingIn(false)
-                      }
-                    }}
-                    type="button">
-                    {isLoggingIn ? "登录中..." : "去登录"}
-                  </button>
-                )}
+                ) : <div className="text-xs text-slate-500">请在下方输入账号登录</div>}
               </div>
             </div>
-            {settings?.loggedIn === false ? (
-              <div className="mt-3 flex items-center justify-end">
-                <button
-                  className="rounded bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500 active:bg-indigo-700 disabled:opacity-60"
-                  disabled={isLoggingIn}
-                  onClick={async () => {
-                    try {
-                      setIsLoggingIn(true)
-                      setError(null)
-                      const email = window.prompt("QTable 邮箱")?.trim()
-                      const password = window.prompt("QTable 密码")
-                      if (!email || !password) throw new Error("已取消登录")
-                      await chrome.runtime.sendMessage({ type: "OAUTH_START_LOGIN", email, password })
-                    } catch (err) {
-                      setError("启动登录失败")
-                      setIsLoggingIn(false)
-                    }
-                  }}
-                  type="button">
-                  {isLoggingIn ? "登录中..." : "去登录"}
-                </button>
+            {!isLoggedIn ? (
+              <div className="mt-4 border-t border-slate-100 pt-4">
+                <div className="mb-2 text-sm font-semibold text-slate-900">登录 QTable</div>
+                <div className="space-y-2">
+                  <input className="w-full rounded border border-slate-200 px-3 py-2 text-sm outline-none focus:border-indigo-400" autoComplete="username" onChange={(e) => setLoginEmail(e.target.value)} placeholder="QTable 邮箱" type="email" value={loginEmail} />
+                  <input className="w-full rounded border border-slate-200 px-3 py-2 text-sm outline-none focus:border-indigo-400" autoComplete="current-password" onChange={(e) => setLoginPassword(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void handleLogin() }} placeholder="密码" type="password" value={loginPassword} />
+                  <button className="w-full rounded bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-500 active:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60" disabled={isLoggingIn} onClick={() => void handleLogin()} type="button">
+                    {isLoggingIn ? "登录中…" : "登录"}
+                  </button>
+                </div>
+                <div className="mt-2 text-xs text-slate-500">账号密码只用于登录本地 QTable 服务，不会打开浏览器弹窗。</div>
               </div>
             ) : null}
           </div>
         )}
       </div>
 
-      {pending && settings?.loggedIn !== false ? (
+      {pending && isLoggedIn ? (
         <TaskForm
           defaultTableId={settings?.defaultTableId}
           onOpenChange={(open) => {
@@ -581,7 +565,7 @@ export default function SidePanel() {
           <button
             className="rounded bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500 active:bg-indigo-700 disabled:opacity-60"
             onClick={() => {
-              if (settings?.loggedIn === false) {
+              if (!isLoggedIn) {
                 setActiveTab("settings")
                 return
               }
@@ -597,7 +581,7 @@ export default function SidePanel() {
               setTaskDialogOpen(true)
             }}
             type="button">
-            {settings?.loggedIn === false ? "去登录" : "新建空白任务"}
+            {isLoggedIn ? "新建空白任务" : "先登录 QTable"}
           </button>
         </div>
       </div>

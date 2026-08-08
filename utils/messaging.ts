@@ -8,6 +8,7 @@ export const CONTENT_OPEN_SELECTION_CARD = "CONTENT_OPEN_SELECTION_CARD" as cons
 export const CONTENT_ACTIVATE_DRAW_MODE = "CONTENT_ACTIVATE_DRAW_MODE" as const
 export const CLIPPER_GET_TASK_OPTIONS = "CLIPPER_GET_TASK_OPTIONS" as const
 export const CLIPPER_CREATE_TASK = "CLIPPER_CREATE_TASK" as const
+export const CLIPPER_CAPTURE_ANNOTATION_IMAGE = "CLIPPER_CAPTURE_ANNOTATION_IMAGE" as const
 
 export type OpenSidePanelPayload = {
   annotationId: string
@@ -49,7 +50,16 @@ export type ClipperCreateTaskMessage = {
     assigneeEmail?: string
     dueDate?: string
     includeContextUrl: boolean
+    screenshotDataUrl?: string
   }
+}
+
+export type ClipperCaptureAnnotationImageMessage = {
+  type: typeof CLIPPER_CAPTURE_ANNOTATION_IMAGE
+  rect: { left: number; top: number; width: number; height: number }
+  overlay?:
+    | { kind: "box"; rect: { left: number; top: number; width: number; height: number } }
+    | { kind: "line"; points: { x: number; y: number }[] }
 }
 
 export type ContentCommandMessage =
@@ -71,7 +81,7 @@ export const sendToBackground = async (msg: ContentToBackgroundMessage) =>
   await chrome.runtime.sendMessage(msg)
 
 export const requestFromBackground = async <T>(
-  msg: ClipperTaskOptionsMessage | ClipperCreateTaskMessage
+  msg: ClipperTaskOptionsMessage | ClipperCreateTaskMessage | ClipperCaptureAnnotationImageMessage
 ): Promise<T> => await chrome.runtime.sendMessage(msg)
 
 export const broadcastFromExtension = async (msg: BackgroundBroadcastMessage) =>
