@@ -71,11 +71,9 @@ export const elementByXPath = (xpath: string): Element | null => {
   }
 }
 
-export const createFingerprintFromSelection = (
-  selection: Selection
+export const createFingerprintFromRange = (
+  range: Range
 ): TextAnchorFingerprint | null => {
-  if (!selection.rangeCount) return null
-  const range = selection.getRangeAt(0)
   const selectedText = range.toString().trim()
   if (!selectedText) return null
 
@@ -100,6 +98,13 @@ export const createFingerprintFromSelection = (
     suffix: ctx.suffix,
     context: containerText.slice(0, 260)
   }
+}
+
+export const createFingerprintFromSelection = (
+  selection: Selection
+): TextAnchorFingerprint | null => {
+  if (!selection.rangeCount) return null
+  return createFingerprintFromRange(selection.getRangeAt(0))
 }
 
 type LocatedText = {

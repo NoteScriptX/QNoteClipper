@@ -1,10 +1,16 @@
-import { getValidAccessToken } from "./auth"
+import { getValidAccessToken, QTABLE_API_BASE_URL } from "./auth"
 
 export type QTable = {
   id: string
   name: string
   emoji?: string
   row_count: number
+}
+
+export type QTableUser = {
+  id: number
+  name: string
+  email: string
 }
 
 /**
@@ -50,18 +56,15 @@ async function authenticatedFetch(
 }
 
 export const getQtables = async (): Promise<QTable[]> => {
-  // TODO: Replace with actual API call when QTable backend is ready
-  // For now, keep the mock implementation
-  const tables: QTable[] = [
-    { id: "tbl_123456", name: "我的待办", emoji: "📋", row_count: 12 },
-    { id: "tbl_7890", name: "内容审核队列", emoji: "🔍", row_count: 3 }
-  ]
-  return await delay(tables, 180)
-  
-  // Uncomment when API is ready:
-  // const response = await authenticatedFetch('https://qtable.example.com/api/tables')
-  // if (!response.ok) throw new Error('Failed to fetch tables')
-  // return await response.json()
+  const response = await authenticatedFetch(`${QTABLE_API_BASE_URL}/api/clipper/tables`)
+  if (!response.ok) throw new Error("加载 QTable 表格失败")
+  return (await response.json()) as QTable[]
+}
+
+export const getQtableUsers = async (): Promise<QTableUser[]> => {
+  const response = await authenticatedFetch(`${QTABLE_API_BASE_URL}/api/clipper/users`)
+  if (!response.ok) throw new Error("加载 QTable 用户失败")
+  return (await response.json()) as QTableUser[]
 }
 
 export type ApiError = {
@@ -73,10 +76,15 @@ export type CreateTaskFromAnnotationInput = {
   annotationId: string
   task: {
     title: string
-    assignee_email: string
+    assignee_email?: string
     due_date?: string
     target_table_id: string
     include_context_url?: boolean
+    note?: string
+    selected_text?: string
+    page_url?: string
+    page_title?: string
+    mode?: "highlight" | "line" | "box" | "underline"
   }
 }
 
@@ -137,20 +145,7 @@ export const createTaskFromAnnotation = async (
     } satisfies ApiError
   }
 
-  const assigneeEmail = input.task.assignee_email.trim()
-  if (!assigneeEmail.includes("@")) {
-    throw {
-      error: "invalid_assignee_email",
-      message: "负责人邮箱格式不正确。"
-    } satisfies ApiError
-  }
-
-  if (assigneeEmail.includes("notfound")) {
-    throw {
-      error: "assignee_not_found",
-      message: `邮箱 ${assigneeEmail} 不在当前工作区中。`
-    } satisfies ApiError
-  }
+  const assigneeEmail = (input.task.assignee_email ?? "").trim()
 
   const dueDate = input.task.due_date?.trim()
   if (dueDate && !isValidDate(dueDate)) {
@@ -170,37 +165,27 @@ export const createTaskFromAnnotation = async (
 
   const includeContextUrl = input.task.include_context_url !== false
 
-  // TODO: Replace with actual API call when QTable backend is ready
-  // For now, keep the mock implementation
-  const tasks = readTasks()
-  const taskId = genTaskId(tasks)
-  const qtableUrl = `https://qtable.notexcriptx.com/table/${encodeURIComponent(
-    tableId
-  )}?row=${encodeURIComponent(taskId)}`
-
-  const stored: StoredTask = {
-    task_id: taskId,
-    annotation_id: input.annotationId,
-    title,
-    assignee_email: assigneeEmail,
-    due_date: dueDate || undefined,
-    target_table_id: tableId,
-    include_context_url: includeContextUrl,
-    created_at: new Date().toISOString(),
-    qtable_url: qtableUrl
+  const response = await authenticatedFetch(`${QTABLE_API_BASE_URL}/api/clipper/tasks`, {
+    method: "POST",
+    body: JSON.stringify({
+      annotation_id: input.annotationId,
+      title,
+      note: input.task.note ?? "",
+      selected_text: input.task.selected_text ?? "",
+      page_url: input.task.page_url ?? "",
+      page_title: input.task.page_title ?? "",
+      mode: input.task.mode ?? "highlight",
+      target_table_id: tableId,
+      assignee_email: assigneeEmail || undefined,
+      due_date: dueDate || undefined,
+      include_context_url: includeContextUrl
+    })
+  })
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}))
+    throw new Error(data.detail || "创建 QTable 任务失败")
   }
-
-  tasks.unshift(stored)
-  writeTasks(tasks)
-
-  return await delay(
-    {
-      task_id: taskId,
-      qtable_url: qtableUrl,
-      annotation_status: "task_created"
-    },
-    420
-  )
+  return (await response.json()) as CreateTaskFromAnnotationResponse
   
   // Uncomment when API is ready:
   // const response = await authenticatedFetch(
@@ -225,22 +210,9 @@ export type UserMe = {
 }
 
 export const getUserMe = async (): Promise<UserMe> => {
-  // TODO: Replace with actual API call using authenticatedFetch
-  // For now, keep the mock implementation
-  return await delay(
-    {
-      id: "usr_42",
-      name: "李产品",
-      email: "li@notexcriptx.com",
-      avatar_url: "https://www.gravatar.com/avatar/?d=mp"
-    },
-    120
-  )
-  
-  // Uncomment when API is ready:
-  // const response = await authenticatedFetch('https://qtable.example.com/api/user/me')
-  // if (!response.ok) throw new Error('Failed to fetch user info')
-  // return await response.json()
+  const response = await authenticatedFetch(`${QTABLE_API_BASE_URL}/oauth/me`)
+  if (!response.ok) throw new Error("获取用户信息失败")
+  return (await response.json()) as UserMe
 }
 
 export type AnnotationTaskDTO = {

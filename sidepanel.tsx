@@ -11,7 +11,7 @@ import "~style.css";
 
 import { AnnotationList, type AnnotationPreview } from "~components/AnnotationList";
 import { TaskForm } from "~components/TaskForm";
-import { createTaskFromAnnotation, getQtables, type QTable } from "~utils/api";
+import { createTaskFromAnnotation, getQtables, getQtableUsers, type QTable, type QTableUser } from "~utils/api";
 import { CONTENT_OPEN_SIDEPANEL_WITH_ANNOTATION, STORAGE_UPDATED, type BackgroundBroadcastMessage, type OpenSidePanelPayload } from "~utils/messaging";
 import { getSettings, patchSettings, type NsXSettings } from "~utils/settings";
 import { getAnnotationById, getAnnotationsByUrl, NSX_ANNOTATIONS_KEY, updateAnnotationById } from "~utils/storage";
@@ -51,6 +51,7 @@ export default function SidePanel() {
   const [pending, setPending] = useState<OpenSidePanelPayload | null>(null)
   const [items, setItems] = useState<AnnotationPreview[]>([])
   const [qtables, setQtables] = useState<QTable[]>([])
+  const [qtableUsers, setQtableUsers] = useState<QTableUser[]>([])
   const [taskDialogOpen, setTaskDialogOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<"annotations" | "settings">(
     "annotations"
@@ -78,16 +79,26 @@ export default function SidePanel() {
       const info = await getCurrentPageInfo()
       setPageInfo(info)
 
+      const st = await getSettings()
+      if (!authState.isAuthenticated) {
+        setSettings({ ...st, loggedIn: false })
+        setQtables([])
+        setItems([])
+        return
+      }
+
       const qts = await getQtables()
       setQtables(qts)
+      setQtableUsers(await getQtableUsers())
 
-      const st = await getSettings()
       setSettings(st)
 
       const annotations = await getAnnotationsByUrl(info.url)
       const nextItems: AnnotationPreview[] = annotations.map((a) => ({
         id: a.id,
         selectedText: a.selectedText ?? "",
+        title: a.title,
+        mode: a.mode,
         note: a.note,
         createdAt: a.createdAt,
         pageTitle: a.pageTitle,
@@ -124,6 +135,10 @@ export default function SidePanel() {
       if (message?.type === "AUTH_STATE_CHANGED") {
         // Refresh settings to get updated user info
         refresh()
+        if (pending) {
+          setActiveTab("annotations")
+          setTaskDialogOpen(true)
+        }
         setIsLoggingIn(false)
         setSuccess("登录成功")
       }
@@ -142,7 +157,7 @@ export default function SidePanel() {
     }
     chrome.runtime.onMessage.addListener(handleAuthMessage)
     return () => chrome.runtime.onMessage.removeListener(handleAuthMessage)
-  }, [refresh])
+  }, [pending, refresh])
 
   useEffect(() => {
     if (!success) return
@@ -341,7 +356,8 @@ export default function SidePanel() {
                   setPending({
                     annotationId,
                     url: pageInfo.url,
-                    selectedText: it.selectedText
+                    selectedText: it.selectedText,
+                    title: it.title
                   })
                   if (settings?.loggedIn === false) {
                     setActiveTab("settings")
@@ -373,6 +389,21 @@ export default function SidePanel() {
                   placeholder="https://api.notescriptx.com (占位)"
                   value={settings?.apiEndpoint ?? ""}
                 />
+              </div>
+              <div>
+                <div className="text-xs font-medium text-slate-500">批注方式</div>
+                <select
+                  className="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 text-sm outline-none focus:border-slate-400"
+                  onChange={async (e) => {
+                    const next = await patchSettings({ annotationMode: e.target.value as NsXSettings["annotationMode"] })
+                    setSettings(next)
+                  }}
+                  value={settings?.annotationMode ?? "highlight"}>
+                  <option value="highlight">文字高亮批注</option>
+                  <option value="line">手绘划线批注</option>
+                  <option value="box">框选批注</option>
+                </select>
+                <div className="mt-1 text-xs text-slate-400">手绘划线：在网页上按住鼠标拖动；框选：拖拽出矩形区域。</div>
               </div>
               <div>
                 <div className="text-xs font-medium text-slate-500">
@@ -451,7 +482,10 @@ export default function SidePanel() {
                       try {
                         setIsLoggingIn(true)
                         setError(null)
-                        await chrome.runtime.sendMessage({ type: "OAUTH_START_LOGIN" })
+                        const email = window.prompt("QTable 邮箱")?.trim()
+                        const password = window.prompt("QTable 密码")
+                        if (!email || !password) throw new Error("已取消登录")
+                        await chrome.runtime.sendMessage({ type: "OAUTH_START_LOGIN", email, password })
                         // The background script will handle the OAuth flow
                         // and send AUTH_STATE_CHANGED message when done
                       } catch (err) {
@@ -474,7 +508,10 @@ export default function SidePanel() {
                     try {
                       setIsLoggingIn(true)
                       setError(null)
-                      await chrome.runtime.sendMessage({ type: "OAUTH_START_LOGIN" })
+                      const email = window.prompt("QTable 邮箱")?.trim()
+                      const password = window.prompt("QTable 密码")
+                      if (!email || !password) throw new Error("已取消登录")
+                      await chrome.runtime.sendMessage({ type: "OAUTH_START_LOGIN", email, password })
                     } catch (err) {
                       setError("启动登录失败")
                       setIsLoggingIn(false)
@@ -506,7 +543,12 @@ export default function SidePanel() {
                 assignee_email: form.assignee,
                 due_date: form.dueDate,
                 target_table_id: form.tableId,
-                include_context_url: form.includeContextUrl
+                include_context_url: form.includeContextUrl,
+                note: ann?.note ?? "",
+                selected_text: ann?.selectedText ?? pending.selectedText,
+                page_url: ann?.url ?? pending.url,
+                page_title: ann?.pageTitle ?? "",
+                mode: ann?.mode ?? pending.mode
               }
             })
             await updateAnnotationById(pending.annotationId, (a) => ({
@@ -525,7 +567,9 @@ export default function SidePanel() {
           }}
           open={taskDialogOpen}
           qt={qtables}
+          users={qtableUsers}
           selectedText={pendingText}
+          defaultTitle={pending.title}
         />
       ) : null}
 

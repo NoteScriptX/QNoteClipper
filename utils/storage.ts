@@ -1,12 +1,18 @@
 export const NSX_ANNOTATIONS_KEY = "nsx_annotations_v1"
 
+export type AnnotationMode = "highlight" | "line" | "box" | "underline"
+
 export type NsXAnnotation = {
   id: string
   url: string
   pageTitle?: string
   createdAt: number
   selectedText: string
+  title?: string
   note?: string
+  mode?: AnnotationMode
+  box?: { left: number; top: number; width: number; height: number }
+  line?: { x: number; y: number }[]
   task?: {
     status: "created"
     taskId: string

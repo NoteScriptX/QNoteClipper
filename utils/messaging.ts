@@ -4,11 +4,17 @@ export const CONTENT_OPEN_SIDEPANEL_WITH_ANNOTATION =
 export const STORAGE_UPDATED = "STORAGE_UPDATED" as const
 
 export const SIDEPANEL_TASK_CREATED = "SIDEPANEL_TASK_CREATED" as const
+export const CONTENT_OPEN_SELECTION_CARD = "CONTENT_OPEN_SELECTION_CARD" as const
+export const CONTENT_ACTIVATE_DRAW_MODE = "CONTENT_ACTIVATE_DRAW_MODE" as const
+export const CLIPPER_GET_TASK_OPTIONS = "CLIPPER_GET_TASK_OPTIONS" as const
+export const CLIPPER_CREATE_TASK = "CLIPPER_CREATE_TASK" as const
 
 export type OpenSidePanelPayload = {
   annotationId: string
   url: string
   selectedText: string
+  title?: string
+  mode?: "highlight" | "line" | "box" | "underline"
 }
 
 export type StorageUpdatedPayload = {
@@ -27,6 +33,29 @@ export type ContentToBackgroundMessage = {
   payload: OpenSidePanelPayload
 }
 
+export type ClipperTaskOptionsMessage = { type: typeof CLIPPER_GET_TASK_OPTIONS }
+
+export type ClipperCreateTaskMessage = {
+  type: typeof CLIPPER_CREATE_TASK
+  payload: {
+    annotationId: string
+    title: string
+    note: string
+    selectedText: string
+    pageUrl: string
+    pageTitle: string
+    mode: "highlight" | "line" | "box" | "underline"
+    tableId: string
+    assigneeEmail?: string
+    dueDate?: string
+    includeContextUrl: boolean
+  }
+}
+
+export type ContentCommandMessage =
+  | { type: typeof CONTENT_OPEN_SELECTION_CARD }
+  | { type: typeof CONTENT_ACTIVATE_DRAW_MODE; mode: "line" | "box" }
+
 export type BackgroundBroadcastMessage =
   | {
       type: typeof CONTENT_OPEN_SIDEPANEL_WITH_ANNOTATION
@@ -40,6 +69,10 @@ export type BackgroundBroadcastMessage =
 
 export const sendToBackground = async (msg: ContentToBackgroundMessage) =>
   await chrome.runtime.sendMessage(msg)
+
+export const requestFromBackground = async <T>(
+  msg: ClipperTaskOptionsMessage | ClipperCreateTaskMessage
+): Promise<T> => await chrome.runtime.sendMessage(msg)
 
 export const broadcastFromExtension = async (msg: BackgroundBroadcastMessage) =>
   await chrome.runtime.sendMessage(msg)

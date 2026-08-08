@@ -7,6 +7,8 @@ export type AnnotationTaskStatus =
 export type AnnotationPreview = {
   id: string
   selectedText: string
+  title?: string
+  mode?: "highlight" | "line" | "box" | "underline"
   note?: string
   createdAt: number
   task: AnnotationTaskStatus
@@ -107,7 +109,7 @@ function AnnotationListItem({
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="line-clamp-2 text-sm font-semibold text-slate-900">
-              {excerpt(it.selectedText)}
+              {it.title || excerpt(it.selectedText)}
             </div>
             <div className="mt-1 line-clamp-1 text-xs text-slate-500">
               {notePreview(it.note)}
@@ -129,6 +131,9 @@ function AnnotationListItem({
             <div className="text-xs font-medium text-slate-500">完整批注</div>
             <div className="mt-1 whitespace-pre-wrap text-sm text-slate-800">
               {(it.note ?? "").trim() || "（无）"}
+            </div>
+            <div className="mt-2 text-xs text-slate-400">
+              类型：{it.mode === "line" || it.mode === "underline" ? "手绘划线" : it.mode === "box" ? "框选" : "文字高亮"}
             </div>
 
             <div className="mt-3 flex items-center justify-between gap-2">

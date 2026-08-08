@@ -6,9 +6,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AnnotationCard } from "~components/AnnotationCard";
 import { Bubble } from "~components/Bubble";
-import { createFingerprintFromSelection, getMergedClientRects, locateRangeFromFingerprint } from "~utils/anchor";
+import { createFingerprintFromRange, createFingerprintFromSelection, getMergedClientRects, locateRangeFromFingerprint } from "~utils/anchor";
 import { CONTENT_OPEN_SIDEPANEL_WITH_ANNOTATION, sendToBackground, STORAGE_UPDATED } from "~utils/messaging";
-import { getAnnotationsByUrl, NSX_ANNOTATIONS_KEY, upsertAnnotation, type NsXAnnotation } from "~utils/storage";
+import { getAnnotationsByUrl, NSX_ANNOTATIONS_KEY, upsertAnnotation, type AnnotationMode, type NsXAnnotation } from "~utils/storage";
+import { getSettings } from "~utils/settings";
 
 
 
@@ -42,6 +43,9 @@ type HighlightRect = {
   id: string
   rects: DOMRect[]
   status: "ok" | "maybe_lost"
+  mode: AnnotationMode
+  box?: { left: number; top: number; width: number; height: number }
+  line?: { x: number; y: number }[]
 }
 
 type DraftAnnotation = {
@@ -52,6 +56,42 @@ type DraftAnnotation = {
   selectedText: string
   anchor: NsXAnnotation["anchor"]
   locateStatus: "ok" | "maybe_lost"
+  mode: AnnotationMode
+  box?: { left: number; top: number; width: number; height: number }
+  line?: { x: number; y: number }[]
+}
+
+type Box = { left: number; top: number; width: number; height: number }
+
+const normalizeBox = (a: { x: number; y: number }, b: { x: number; y: number }): Box => ({
+  left: Math.min(a.x, b.x),
+  top: Math.min(a.y, b.y),
+  width: Math.abs(a.x - b.x),
+  height: Math.abs(a.y - b.y)
+})
+
+const rectsIntersect = (a: DOMRect, b: Box) =>
+  a.right >= b.left && a.left <= b.left + b.width && a.bottom >= b.top && a.top <= b.top + b.height
+
+const getTextAndRangeInBox = (box: Box): { text: string; range: Range | null } => {
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
+  const chunks: string[] = []
+  let firstRange: Range | null = null
+  while (walker.nextNode()) {
+    const node = walker.currentNode as Text
+    const parent = node.parentElement
+    if (!parent || parent.closest("#nsx-clipper-csui,script,style,noscript")) continue
+    const range = document.createRange()
+    range.selectNodeContents(node)
+    const rects = Array.from(range.getClientRects())
+    if (!rects.some((rect) => rectsIntersect(rect, box))) continue
+    const value = (node.nodeValue || "").trim()
+    if (value) {
+      chunks.push(value)
+      if (!firstRange) firstRange = range
+    }
+  }
+  return { text: chunks.join(" ").trim().slice(0, 4000), range: firstRange }
 }
 
 type CardState =
@@ -170,9 +210,14 @@ export default function Content() {
   const [card, setCard] = useState<CardState>({ visible: false })
   const [highlights, setHighlights] = useState<HighlightRect[]>([])
   const [ephemeralRects, setEphemeralRects] = useState<DOMRect[]>([])
+  const [boxPreview, setBoxPreview] = useState<Box | null>(null)
+  const [linePreview, setLinePreview] = useState<{ x: number; y: number }[] | null>(null)
   const rafRef = useRef<number | null>(null)
   const ephemeralTimerRef = useRef<number | null>(null)
   const ephemeralRectsRef = useRef<DOMRect[]>([])
+  const modeRef = useRef<AnnotationMode>("highlight")
+  const boxStartRef = useRef<{ x: number; y: number } | null>(null)
+  const linePointsRef = useRef<{ x: number; y: number }[] | null>(null)
 
   const url = useMemo(() => window.location.href, [])
 
@@ -181,6 +226,14 @@ export default function Content() {
       const annotations = await getAnnotationsByUrl(url)
       const next: HighlightRect[] = []
       for (const a of annotations) {
+        if (a.mode === "line" && a.line?.length) {
+          next.push({ id: a.id, rects: [], status: "ok", mode: "line", line: a.line })
+          continue
+        }
+        if (a.mode === "box" && a.box) {
+          next.push({ id: a.id, rects: [], status: "ok", mode: "box", box: a.box })
+          continue
+        }
         const located = locateRangeFromFingerprint({
           selectedText: a.selectedText,
           xpath: a.anchor.xpath,
@@ -189,13 +242,14 @@ export default function Content() {
           context: a.anchor.context
         })
         if (!located.range) {
-          next.push({ id: a.id, rects: [], status: located.status })
+          next.push({ id: a.id, rects: [], status: located.status, mode: a.mode === "underline" ? "underline" : "highlight" })
           continue
         }
         next.push({
           id: a.id,
           rects: getMergedClientRects(located.range),
-          status: located.status
+          status: located.status,
+          mode: a.mode === "underline" ? "underline" : "highlight"
         })
       }
       setHighlights(next)
@@ -207,6 +261,20 @@ export default function Content() {
   useEffect(() => {
     refreshHighlights()
   }, [card.visible, refreshHighlights])
+
+  useEffect(() => {
+    const loadMode = async () => {
+      modeRef.current = (await getSettings()).annotationMode
+    }
+    loadMode()
+    const listener = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area !== "local") return
+      const next = changes["nsx_settings_v1"]?.newValue as { annotationMode?: AnnotationMode } | undefined
+      if (next?.annotationMode) modeRef.current = next.annotationMode
+    }
+    chrome.storage.onChanged.addListener(listener)
+    return () => chrome.storage.onChanged.removeListener(listener)
+  }, [])
 
   useEffect(() => {
     const listener = (message: any) => {
@@ -235,6 +303,48 @@ export default function Content() {
     const onMouseUp = (e: MouseEvent) => {
       if (card.visible) return
       if (isInCsui(e)) return
+      if (boxStartRef.current) {
+        const start = boxStartRef.current
+        boxStartRef.current = null
+        const box = normalizeBox(start, { x: e.clientX, y: e.clientY })
+        setBoxPreview(null)
+        if (box.width < 12 || box.height < 12) return
+        const captured = getTextAndRangeInBox(box)
+        if (!captured.text || !captured.range) return
+        const fingerprint = createFingerprintFromRange(captured.range)
+        if (!fingerprint) return
+        const docBox = { left: box.left + window.scrollX, top: box.top + window.scrollY, width: box.width, height: box.height }
+        const draft: DraftAnnotation = {
+          id: genId(), url, pageTitle: document.title || "", createdAt: Date.now(),
+          selectedText: captured.text, anchor: fingerprint, locateStatus: "ok", mode: "box", box: docBox
+        }
+        const cardPos = computeCardPositionFromBubble({ x: box.left, y: box.top })
+        setCard({ visible: true, x: cardPos.x, y: cardPos.y, arrowSide: cardPos.arrowSide, draft })
+        return
+      }
+      if (linePointsRef.current) {
+        const points = linePointsRef.current
+        linePointsRef.current = null
+        setLinePreview(null)
+        if (points.length < 2) return
+        const bounds = {
+          left: Math.min(...points.map((point) => point.x)),
+          top: Math.min(...points.map((point) => point.y)),
+          width: Math.max(...points.map((point) => point.x)) - Math.min(...points.map((point) => point.x)),
+          height: Math.max(...points.map((point) => point.y)) - Math.min(...points.map((point) => point.y))
+        }
+        const captured = getTextAndRangeInBox(bounds)
+        const fingerprint = captured.range ? createFingerprintFromRange(captured.range) : null
+        const draft: DraftAnnotation = {
+          id: genId(), url, pageTitle: document.title || "", createdAt: Date.now(),
+          selectedText: captured.text || "手绘划线", anchor: fingerprint || { selectedText: captured.text || "手绘划线", xpath: "", prefix: "", suffix: "", context: "" },
+          locateStatus: "ok", mode: "line",
+          line: points.map((point) => ({ x: point.x + window.scrollX, y: point.y + window.scrollY }))
+        }
+        const cardPos = computeCardPositionFromBubble({ x: points[0].x, y: points[0].y })
+        setCard({ visible: true, x: cardPos.x, y: cardPos.y, arrowSide: cardPos.arrowSide, draft })
+        return
+      }
       const selection = window.getSelection()
       if (!selection) return
       setCard({ visible: false })
@@ -271,6 +381,16 @@ export default function Content() {
       if (isInCsui(e)) {
         return
       }
+      if (modeRef.current === "box") {
+        boxStartRef.current = { x: e.clientX, y: e.clientY }
+        setBoxPreview({ left: e.clientX, top: e.clientY, width: 0, height: 0 })
+        return
+      }
+      if (modeRef.current === "line") {
+        linePointsRef.current = [{ x: e.clientX, y: e.clientY }]
+        setLinePreview(linePointsRef.current)
+        return
+      }
       if (ephemeralTimerRef.current != null) {
         window.clearTimeout(ephemeralTimerRef.current)
         ephemeralTimerRef.current = null
@@ -292,12 +412,23 @@ export default function Content() {
 
     document.addEventListener("mouseup", onMouseUp, true)
     document.addEventListener("mousedown", onMouseDown, true)
+    const onMouseMove = (e: MouseEvent) => {
+      const start = boxStartRef.current
+      if (start) setBoxPreview(normalizeBox(start, { x: e.clientX, y: e.clientY }))
+      const line = linePointsRef.current
+      if (!line) return
+      const next = [...line, { x: e.clientX, y: e.clientY }]
+      linePointsRef.current = next.length > 500 ? next.slice(-500) : next
+      setLinePreview(linePointsRef.current)
+    }
+    document.addEventListener("mousemove", onMouseMove, true)
     window.addEventListener("scroll", onScrollOrResize, true)
     window.addEventListener("resize", onScrollOrResize, true)
 
     return () => {
       document.removeEventListener("mouseup", onMouseUp, true)
       document.removeEventListener("mousedown", onMouseDown, true)
+      document.removeEventListener("mousemove", onMouseMove, true)
       window.removeEventListener("scroll", onScrollOrResize, true)
       window.removeEventListener("resize", onScrollOrResize, true)
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current)
@@ -339,7 +470,8 @@ export default function Content() {
         suffix: fp.suffix,
         context: fp.context
       },
-      locateStatus: "ok"
+      locateStatus: "ok",
+      mode: modeRef.current
     }
 
     selection.removeAllRanges()
@@ -353,7 +485,7 @@ export default function Content() {
   }, [bubble, url])
 
   const saveDraft = useCallback(
-    async (draft: DraftAnnotation, note: string) => {
+    async (draft: DraftAnnotation, input: { title: string; note: string }) => {
       try {
         const annotation: NsXAnnotation = {
           id: draft.id,
@@ -361,7 +493,11 @@ export default function Content() {
           pageTitle: draft.pageTitle,
           createdAt: draft.createdAt,
           selectedText: draft.selectedText,
-          note,
+          title: input.title.trim(),
+          note: input.note,
+          mode: draft.mode,
+          box: draft.box,
+          line: draft.line,
           anchor: draft.anchor,
           locateStatus: draft.locateStatus
         }
@@ -383,21 +519,24 @@ export default function Content() {
           inset: 0,
           zIndex: 2147483646
         }}>
-        {highlights.flatMap((h) =>
-          h.rects.map((r, idx) => (
+        {highlights.flatMap((h) => {
+          if (h.mode === "line" && h.line?.length) {
+            const points = h.line.map((point) => `${point.x - window.scrollX},${point.y - window.scrollY}`).join(" ")
+            return [<svg key={h.id} className="pointer-events-none fixed inset-0 h-full w-full" style={{ zIndex: 2147483645 }}><polyline fill="none" points={points} stroke="#ef4444" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" /></svg>]
+          }
+          if (h.mode === "box" && h.box) {
+            return [
+              <div key={h.id} className="pointer-events-none border-2 border-indigo-500 bg-indigo-100/20" style={{ position: "absolute", left: h.box.left - window.scrollX, top: h.box.top - window.scrollY, width: h.box.width, height: h.box.height }} />
+            ]
+          }
+          return h.rects.map((r, idx) => (
             <mark
               key={`${h.id}_${idx}`}
-              className="pointer-events-none rounded bg-yellow-300/60"
-              style={{
-                position: "fixed",
-                left: r.left,
-                top: r.top,
-                width: r.width,
-                height: r.height
-              }}
+              className={`pointer-events-none ${h.mode === "underline" ? "border-b-2 border-red-500 bg-transparent" : "rounded bg-yellow-300/60"}`}
+              style={{ position: "fixed", left: r.left, top: r.top, width: r.width, height: r.height }}
             />
           ))
-        )}
+        })}
         {ephemeralRects.map((r, idx) => (
           <mark
             key={`ephemeral_${idx}`}
@@ -421,25 +560,27 @@ export default function Content() {
         <AnnotationCard
           initialNote=""
           onClose={() => setCard({ visible: false })}
-          onCreateTask={async (note) => {
+          onCreateTask={async (input) => {
             const draft = card.draft
-            await saveDraft(draft, note)
+            await saveDraft(draft, input)
             try {
               await sendToBackground({
                 type: CONTENT_OPEN_SIDEPANEL_WITH_ANNOTATION,
                 payload: {
                   annotationId: draft.id,
                   url: draft.url,
-                  selectedText: draft.selectedText
+                  selectedText: draft.selectedText,
+                  title: input.title.trim(),
+                  mode: draft.mode
                 }
               })
             } catch {
               // ignore
             }
           }}
-          onSave={async (note) => {
+          onSave={async (input) => {
             const draft = card.draft
-            await saveDraft(draft, note)
+            await saveDraft(draft, input)
           }}
           arrowSide={card.arrowSide}
           pageTitle={card.draft.pageTitle}
@@ -447,6 +588,14 @@ export default function Content() {
           x={card.x}
           y={card.y}
         />
+      ) : null}
+      {boxPreview ? (
+        <div className="pointer-events-none fixed border-2 border-indigo-500 bg-indigo-200/20" style={{ left: boxPreview.left, top: boxPreview.top, width: boxPreview.width, height: boxPreview.height, zIndex: 2147483645 }} />
+      ) : null}
+      {linePreview && linePreview.length > 1 ? (
+        <svg className="pointer-events-none fixed inset-0 h-full w-full" style={{ zIndex: 2147483645 }}>
+          <polyline fill="none" points={linePreview.map((point) => `${point.x},${point.y}`).join(" ")} stroke="#ef4444" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" />
+        </svg>
       ) : null}
     </div>
   )

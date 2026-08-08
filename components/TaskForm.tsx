@@ -1,13 +1,15 @@
 import * as Dialog from "@radix-ui/react-dialog"
 import { useEffect, useMemo, useState } from "react"
 
-import type { QTable } from "~utils/api"
+import type { QTable, QTableUser } from "~utils/api"
 
 type Props = {
   open: boolean
   onOpenChange: (open: boolean) => void
   qt: QTable[]
+  users: QTableUser[]
   selectedText: string
+  defaultTitle?: string
   defaultTableId?: string
   onSubmit: (input: {
     title: string
@@ -27,13 +29,15 @@ export function TaskForm({
   open,
   onOpenChange,
   qt,
+  users,
   selectedText,
+  defaultTitle: preferredTitle,
   defaultTableId: preferredTableId,
   onSubmit
 }: Props) {
   const defaultTitle = useMemo(
-    () => defaultTitleFromText(selectedText),
-    [selectedText]
+    () => preferredTitle?.trim() || defaultTitleFromText(selectedText),
+    [preferredTitle, selectedText]
   )
   const defaultTableId =
     preferredTableId && qt.some((t) => t.id === preferredTableId)
@@ -42,6 +46,7 @@ export function TaskForm({
 
   const [title, setTitle] = useState(defaultTitle)
   const [assignee, setAssignee] = useState("")
+  const [assigneeQuery, setAssigneeQuery] = useState("")
   const [dueDate, setDueDate] = useState("")
   const [tableId, setTableId] = useState(defaultTableId)
   const [includeContextUrl, setIncludeContextUrl] = useState(true)
@@ -52,19 +57,19 @@ export function TaskForm({
     if (!open) return
     setTitle(defaultTitle)
     setAssignee("")
+    setAssigneeQuery("")
     setDueDate("")
     setTableId(defaultTableId)
     setIncludeContextUrl(true)
     setError(null)
   }, [open, defaultTableId, defaultTitle])
 
-  const emailLooksOk = assignee.trim().includes("@") && assignee.trim().includes(".")
+  const filteredUsers = users.filter((user) => {
+    const query = assigneeQuery.trim().toLowerCase()
+    return !query || `${user.name} ${user.email}`.toLowerCase().includes(query)
+  }).slice(0, 8)
 
-  const canSubmit =
-    title.trim().length > 0 &&
-    assignee.trim().length > 0 &&
-    emailLooksOk &&
-    tableId.trim().length > 0
+  const canSubmit = title.trim().length > 0 && tableId.trim().length > 0
 
   return (
     <Dialog.Root onOpenChange={onOpenChange} open={open}>
@@ -103,18 +108,36 @@ export function TaskForm({
             </div>
 
             <div>
-              <div className="text-xs font-medium text-slate-500">负责人</div>
-              <input
-                className="mt-1 w-full rounded border border-slate-200 px-2 py-1 text-sm outline-none focus:border-slate-400"
-                onChange={(e) => setAssignee(e.target.value)}
-                placeholder="name@example.com"
-                value={assignee}
-              />
-              {assignee && !emailLooksOk ? (
-                <div className="mt-1 text-xs text-rose-600">
-                  请输入有效邮箱
-                </div>
-              ) : null}
+              <div className="text-xs font-medium text-slate-500">负责人（可搜索选择）</div>
+              <div className="relative mt-1">
+                <input
+                  className="w-full rounded border border-slate-200 px-2 py-1 text-sm outline-none focus:border-slate-400"
+                  onChange={(e) => {
+                    setAssigneeQuery(e.target.value)
+                    setAssignee("")
+                  }}
+                  placeholder="搜索姓名或邮箱"
+                  value={assigneeQuery}
+                />
+                {assigneeQuery && !assignee ? (
+                  <div className="absolute left-0 right-0 top-full z-20 mt-1 max-h-40 overflow-auto rounded border border-slate-200 bg-white py-1 shadow-lg">
+                    {filteredUsers.map((user) => (
+                      <button
+                        className="block w-full px-2 py-1.5 text-left text-xs hover:bg-indigo-50"
+                        key={user.id}
+                        onClick={() => {
+                          setAssignee(user.email)
+                          setAssigneeQuery(`${user.name}（${user.email}）`)
+                        }}
+                        type="button">
+                        <span className="font-medium text-slate-800">{user.name}</span>
+                        <span className="ml-2 text-slate-500">{user.email}</span>
+                      </button>
+                    ))}
+                    {filteredUsers.length === 0 ? <div className="px-2 py-1.5 text-xs text-slate-400">没有匹配用户</div> : null}
+                  </div>
+                ) : null}
+              </div>
             </div>
 
             <div className="flex items-end gap-2">
@@ -169,7 +192,7 @@ export function TaskForm({
               </div>
               <button
                 aria-checked={includeContextUrl}
-                className={`relative h-6 w-10 rounded-full border transition-colors ${
+                className={`relative h-6 w-11 shrink-0 rounded-full border p-0 transition-colors ${
                   includeContextUrl
                     ? "border-indigo-500 bg-indigo-600"
                     : "border-slate-300 bg-white"
@@ -177,11 +200,7 @@ export function TaskForm({
                 onClick={() => setIncludeContextUrl((v) => !v)}
                 role="switch"
                 type="button">
-                <span
-                  className={`absolute top-1/2 h-4 w-4 -translate-y-1/2 rounded-full bg-white shadow transition-transform ${
-                    includeContextUrl ? "translate-x-5" : "translate-x-1"
-                  }`}
-                />
+                <span className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform" style={{ transform: includeContextUrl ? "translateX(20px)" : "translateX(0)" }} />
               </button>
             </div>
           </div>

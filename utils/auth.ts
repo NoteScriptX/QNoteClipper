@@ -6,18 +6,20 @@
 // Configuration - Update these values for your QTable deployment
 const OAUTH_CONFIG = {
   // QTable Web OAuth authorization endpoint
-  AUTHORIZATION_ENDPOINT: "https://retrial-prideful-goofball.ngrok-free.dev/oauth/authorize",
+  AUTHORIZATION_ENDPOINT: "http://localhost:9000/oauth/authorize",
   // QTable Web token endpoint
-  TOKEN_ENDPOINT: "https://retrial-prideful-goofball.ngrok-free.dev/oauth/token",
+  TOKEN_ENDPOINT: "http://localhost:9000/oauth/token",
   // User info endpoint (optional)
-  USER_INFO_ENDPOINT: "https://retrial-prideful-goofball.ngrok-free.dev/api/user/me",
+  USER_INFO_ENDPOINT: "http://localhost:9000/oauth/me",
   // OAuth client ID registered in QTable
   CLIENT_ID: "note-script-clipper",
   // Requested scopes
   SCOPE: "openid profile email",
   // Set to true to use mock authentication for testing
-  USE_MOCK_AUTH: true
+  USE_MOCK_AUTH: false
 }
+
+export const QTABLE_API_BASE_URL = "http://localhost:9000"
 
 // Storage keys
 const STORAGE_KEYS = {
@@ -162,6 +164,18 @@ export async function startLoginFlow(): Promise<void> {
     console.error("OAuth login failed:", error)
     throw error
   }
+}
+
+export async function loginWithPassword(email: string, password: string): Promise<void> {
+  const response = await fetch(`${QTABLE_API_BASE_URL}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password })
+  })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok || !data.access_token) throw new Error(data.detail || "账号或密码错误")
+  await storeTokens({ access_token: data.access_token, expires_in: 3600 })
+  await fetchUserInfo(data.access_token)
 }
 
 /**

@@ -34,7 +34,8 @@
       "tabs",
       "sidePanel",
       "identity",
-      "alarms"
+      "alarms",
+      "contextMenus"
     ],
     "host_permissions": [
       "<all_urls>"

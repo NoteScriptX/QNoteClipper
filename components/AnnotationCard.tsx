@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import type { QTable, QTableUser } from "~utils/api"
 
 
 
@@ -12,8 +13,9 @@ type Props = {
   pageTitle?: string
   initialNote?: string
   onClose: () => void
-  onSave: (note: string) => Promise<void> | void
-  onCreateTask: (note: string) => Promise<void> | void
+  onSave: (input: { title: string; note: string }) => Promise<void> | void
+  taskOptions?: { tables: QTable[]; users: QTableUser[]; error?: string; loading: boolean }
+  onCreateTask: (input: { title: string; note: string; tableId: string; assigneeEmail?: string; dueDate?: string; includeContextUrl: boolean }) => Promise<void> | void
 }
 
 const clamp = (v: number, min: number, max: number) =>
@@ -28,26 +30,35 @@ export function AnnotationCard({
   initialNote,
   onClose,
   onSave,
+  taskOptions,
   onCreateTask
 }: Props) {
+  const [title, setTitle] = useState("")
   const [note, setNote] = useState(initialNote ?? "")
   const [isSaving, setIsSaving] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const [savedFlash, setSavedFlash] = useState(false)
+  const [tableId, setTableId] = useState("")
+  const [assigneeEmail, setAssigneeEmail] = useState("")
+  const [dueDate, setDueDate] = useState("")
+  const [includeContextUrl, setIncludeContextUrl] = useState(true)
+  const [taskError, setTaskError] = useState<string | null>(null)
 
   const excerpt = useMemo(() => {
     const t = selectedText.trim()
     return t.length > 100 ? `${t.slice(0, 100)}…` : t
   }, [selectedText])
 
-  const cardWidth = 300
+  const cardWidth = 420
   const padding = 12
   const left = clamp(x, padding, window.innerWidth - cardWidth - padding)
-  const top = clamp(y, padding, window.innerHeight - 400 - padding)
+  const top = clamp(y, padding, window.innerHeight - 620 - padding)
+  const tables = taskOptions?.tables ?? []
+  const activeTableId = tableId || tables[0]?.id || ""
 
   return (
     <div
-      className="pointer-events-auto relative w-[320px] rounded-xl border border-slate-200/90 bg-white/95 shadow-[0_14px_40px_rgba(15,23,42,0.16)] ring-1 ring-indigo-100/60 backdrop-blur-sm"
+      className="pointer-events-auto relative w-[420px] rounded-xl border border-slate-200/90 bg-white/95 shadow-[0_14px_40px_rgba(15,23,42,0.16)] ring-1 ring-indigo-100/60 backdrop-blur-sm"
       style={{
         position: "fixed",
         left,
@@ -92,9 +103,9 @@ export function AnnotationCard({
               if (!e.ctrlKey) return
               if (e.key !== "Enter") return
               e.preventDefault()
-              if (isSaving || isCreating) return
+              if (isSaving || isCreating || !title.trim()) return
               setIsSaving(true)
-              Promise.resolve(onSave(note))
+              Promise.resolve(onSave({ title, note }))
                 .then(() => {
                   setSavedFlash(true)
                   setTimeout(() => onClose(), 260)
@@ -111,14 +122,64 @@ export function AnnotationCard({
           </div>
         </div>
 
+        <input
+          className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm outline-none focus:border-indigo-400"
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="批注标题（必填）"
+          value={title}
+        />
+
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <label className="block text-xs font-medium text-slate-600">
+            目标数据表
+            <select
+              className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm outline-none focus:border-indigo-400"
+              disabled={taskOptions?.loading || tables.length === 0}
+              onChange={(e) => setTableId(e.target.value)}
+              value={activeTableId}>
+              {tables.length ? tables.map((table) => <option key={table.id} value={table.id}>{table.name}（{table.row_count}）</option>) : <option value="">{taskOptions?.loading ? "加载 QTable…" : "暂无可用数据表"}</option>}
+            </select>
+          </label>
+          <label className="block text-xs font-medium text-slate-600">
+            负责人（可搜索）
+            <input
+              className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-2 text-sm outline-none focus:border-indigo-400"
+              list={`nsx-users-${Math.round(x)}-${Math.round(y)}`}
+              onChange={(e) => setAssigneeEmail(e.target.value)}
+              placeholder="姓名或邮箱"
+              value={assigneeEmail}
+            />
+            <datalist id={`nsx-users-${Math.round(x)}-${Math.round(y)}`}>
+              {(taskOptions?.users ?? []).map((user) => <option key={user.id} value={user.email}>{user.name}</option>)}
+            </datalist>
+          </label>
+          <label className="block text-xs font-medium text-slate-600">
+            截止日期
+            <input className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-2 text-sm outline-none focus:border-indigo-400" onChange={(e) => setDueDate(e.target.value)} type="date" value={dueDate} />
+          </label>
+          <div className="flex items-end">
+            <button
+              aria-checked={includeContextUrl}
+              className={`flex h-10 w-full items-center justify-between rounded-lg border px-3 text-xs ${includeContextUrl ? "border-indigo-300 bg-indigo-50 text-indigo-700" : "border-slate-200 bg-white text-slate-600"}`}
+              onClick={() => setIncludeContextUrl((value) => !value)}
+              role="switch"
+              type="button">
+              <span>附网页链接</span>
+              <span className={`relative h-5 w-9 rounded-full transition-colors ${includeContextUrl ? "bg-indigo-600" : "bg-slate-300"}`}><span className="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform" style={{ transform: includeContextUrl ? "translateX(16px)" : "translateX(0)" }} /></span>
+            </button>
+          </div>
+        </div>
+        {taskOptions?.error ? <div className="mt-2 text-xs text-rose-600">{taskOptions.error}</div> : null}
+        {taskError ? <div className="mt-2 text-xs text-rose-600">{taskError}</div> : null}
+
         <div className="mt-3.5 grid grid-cols-2 gap-2.5">
           <button
             className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 active:bg-slate-100 disabled:opacity-60"
-            disabled={isSaving || isCreating}
+            disabled={isSaving || isCreating || !title.trim() || !activeTableId || taskOptions?.loading}
             onClick={async () => {
               setIsSaving(true)
               try {
-                await onSave(note)
+                await onSave({ title, note })
                 setSavedFlash(true)
                 setTimeout(() => onClose(), 260)
               } finally {
@@ -130,12 +191,15 @@ export function AnnotationCard({
           </button>
           <button
             className="rounded-lg bg-indigo-600 px-3 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-indigo-500 active:bg-indigo-700 disabled:opacity-60"
-            disabled={isSaving || isCreating}
+            disabled={isSaving || isCreating || !title.trim()}
             onClick={async () => {
               setIsCreating(true)
               try {
-                await onCreateTask(note)
+                setTaskError(null)
+                await onCreateTask({ title, note, tableId: activeTableId, assigneeEmail: assigneeEmail.trim() || undefined, dueDate: dueDate || undefined, includeContextUrl })
                 onClose()
+              } catch (error) {
+                setTaskError(error instanceof Error ? error.message : "创建任务失败")
               } finally {
                 setIsCreating(false)
               }
