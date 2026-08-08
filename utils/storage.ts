@@ -13,10 +13,17 @@ export type NsXAnnotation = {
   mode?: AnnotationMode
   box?: { left: number; top: number; width: number; height: number }
   line?: { x: number; y: number }[]
+  shapeAnchor?: { left: number; top: number; width: number; height: number }
   task?: {
     status: "created"
     taskId: string
     qtableUrl?: string
+    tableId?: string
+    statusFieldId?: string
+    statusFieldName?: string
+    statusFieldType?: string
+    statusValue?: string
+    statusOptions?: { id: string; label: string }[]
   }
   anchor: {
     xpath: string

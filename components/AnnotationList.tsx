@@ -2,7 +2,17 @@ import { useState } from "react"
 
 export type AnnotationTaskStatus =
   | { kind: "not_created" }
-  | { kind: "created"; taskId: string; qtableUrl?: string }
+  | {
+      kind: "created"
+      taskId: string
+      qtableUrl?: string
+      tableId?: string
+      statusFieldId?: string
+      statusFieldName?: string
+      statusFieldType?: string
+      statusValue?: string
+      statusOptions?: { id: string; label: string }[]
+    }
 
 export type AnnotationPreview = {
   id: string
@@ -18,6 +28,7 @@ export type AnnotationPreview = {
 type Props = {
   items: AnnotationPreview[]
   onCreateTask?: (annotationId: string) => void
+  onStatusChange?: (annotationId: string, value: string) => Promise<void> | void
 }
 
 const excerpt = (text: string) => {
@@ -47,7 +58,7 @@ const formatRelativeTime = (ts: number) => {
   return `${mm}-${dd}`
 }
 
-export function AnnotationList({ items, onCreateTask }: Props) {
+export function AnnotationList({ items, onCreateTask, onStatusChange }: Props) {
   if (items.length === 0) {
     return (
       <div className="flex min-h-48 flex-col items-center justify-center rounded border border-dashed border-slate-200 bg-white p-6 text-center">
@@ -64,8 +75,8 @@ export function AnnotationList({ items, onCreateTask }: Props) {
 
   return (
     <div className="space-y-2">
-      {items.map((it) => (
-        <AnnotationListItem it={it} key={it.id} onCreateTask={onCreateTask} />
+        {items.map((it) => (
+        <AnnotationListItem it={it} key={it.id} onCreateTask={onCreateTask} onStatusChange={onStatusChange} />
       ))}
     </div>
   )
@@ -73,24 +84,22 @@ export function AnnotationList({ items, onCreateTask }: Props) {
 
 function AnnotationListItem({
   it,
-  onCreateTask
+  onCreateTask,
+  onStatusChange
 }: {
   it: AnnotationPreview
   onCreateTask?: (annotationId: string) => void
+  onStatusChange?: (annotationId: string, value: string) => Promise<void> | void
 }) {
   const [open, setOpen] = useState(false)
-  const status =
-    it.task.kind === "created"
-      ? {
-          line: "bg-emerald-500",
-          pill: "已派活",
-          pillClass: "bg-emerald-50 text-emerald-700 border-emerald-200"
-        }
-      : {
-          line: "bg-amber-500",
-          pill: "待派活",
-          pillClass: "bg-amber-50 text-amber-800 border-amber-200"
-        }
+  const statusValue = it.task.kind === "created" ? it.task.statusValue : undefined
+  const statusOption = it.task.kind === "created" ? it.task.statusOptions?.find((option) => option.id === statusValue || option.label === statusValue) : undefined
+  const selectedStatusId = it.task.kind === "created" ? (statusOption?.id || it.task.statusOptions?.[0]?.id) : undefined
+  const statusLabel = statusOption?.label || statusValue || (it.task.kind === "created" ? "待处理" : "待派活")
+  const isDone = /完成|done|closed|关闭/i.test(statusLabel)
+  const status = it.task.kind === "created"
+    ? { line: isDone ? "bg-emerald-500" : "bg-indigo-500", pillClass: isDone ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-indigo-50 text-indigo-700 border-indigo-200" }
+    : { line: "bg-amber-500", pillClass: "bg-amber-50 text-amber-800 border-amber-200" }
 
   return (
     <div
@@ -118,7 +127,19 @@ function AnnotationListItem({
           <div className="shrink-0 text-right">
             <div
               className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${status.pillClass}`}>
-              {status.pill}
+              {it.task.kind === "created" && it.task.statusOptions?.length && onStatusChange ? (
+                <select
+                  aria-label="任务状态"
+                  className={`rounded-full border px-2 py-0.5 text-xs outline-none ${status.pillClass}`}
+                  onChange={(e) => {
+                    e.stopPropagation()
+                    void onStatusChange(it.id, e.target.value)
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                  value={selectedStatusId || it.task.statusOptions[0].id}>
+                  {it.task.statusOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
+                </select>
+              ) : statusLabel}
             </div>
             <div className="mt-1 text-xs text-slate-400">
               {formatRelativeTime(it.createdAt)}

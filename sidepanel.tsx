@@ -11,10 +11,10 @@ import "~style.css";
 
 import { AnnotationList, type AnnotationPreview } from "~components/AnnotationList";
 import { TaskForm } from "~components/TaskForm";
-import { createTaskFromAnnotation, getQtables, getQtableUsers, type QTable, type QTableUser } from "~utils/api";
+import { createTaskFromAnnotation, getQtables, getQtableUsers, getTaskStatus, updateTaskStatus, type QTable, type QTableUser } from "~utils/api";
 import { CONTENT_OPEN_SIDEPANEL_WITH_ANNOTATION, STORAGE_UPDATED, type BackgroundBroadcastMessage, type OpenSidePanelPayload } from "~utils/messaging";
 import { getSettings, patchSettings, type NsXSettings } from "~utils/settings";
-import { getAnnotationById, getAnnotationsByUrl, NSX_ANNOTATIONS_KEY, updateAnnotationById } from "~utils/storage";
+import { getAllAnnotations, getAnnotationById, NSX_ANNOTATIONS_KEY, updateAnnotationById } from "~utils/storage";
 import { getAuthState } from "~utils/auth";
 
 
@@ -25,6 +25,11 @@ type PageInfo = {
   title: string
   url: string
   faviconUrl?: string
+}
+
+type PageChoice = {
+  url: string
+  title: string
 }
 
 const getCurrentPageInfo = async (): Promise<PageInfo> => {
@@ -45,6 +50,12 @@ const shortUrl = (url: string) => {
   }
 }
 
+const tableIdFromQTableUrl = (url?: string) => {
+  if (!url) return undefined
+  const match = url.match(/\/table\/([^/?#]+)/)
+  return match?.[1]
+}
+
 export default function SidePanel() {
   const [pageInfo, setPageInfo] = useState<PageInfo>({ title: "", url: "" })
   const [isRefreshing, setIsRefreshing] = useState(false)
@@ -52,6 +63,8 @@ export default function SidePanel() {
   const [items, setItems] = useState<AnnotationPreview[]>([])
   const [qtables, setQtables] = useState<QTable[]>([])
   const [qtableUsers, setQtableUsers] = useState<QTableUser[]>([])
+  const [pageChoices, setPageChoices] = useState<PageChoice[]>([])
+  const [selectedPageUrl, setSelectedPageUrl] = useState<string | null>(null)
   const [taskDialogOpen, setTaskDialogOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<"annotations" | "settings">(
     "annotations"
@@ -68,11 +81,14 @@ export default function SidePanel() {
 
   const pendingText = pending?.selectedText ?? ""
   const domain = useMemo(
-    () => (pageInfo.url ? shortUrl(pageInfo.url) : ""),
-    [pageInfo.url]
+    () => (selectedPageUrl || pageInfo.url ? shortUrl(selectedPageUrl || pageInfo.url) : ""),
+    [pageInfo.url, selectedPageUrl]
   )
+  const displayUrl = selectedPageUrl || pageInfo.url
+  const selectedPage = pageChoices.find((page) => page.url === displayUrl)
+  const displayTitle = selectedPageUrl ? (selectedPage?.title || shortUrl(displayUrl)) : pageInfo.title
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (forceCurrent = false) => {
     setIsRefreshing(true)
     setError(null)
     try {
@@ -81,6 +97,7 @@ export default function SidePanel() {
       
       const info = await getCurrentPageInfo()
       setPageInfo(info)
+      if (forceCurrent) setSelectedPageUrl(null)
 
       const st = await getSettings()
       if (!authState.isAuthenticated) {
@@ -98,10 +115,18 @@ export default function SidePanel() {
       const validDefaultTableId = qts.some((table) => table.id === st.defaultTableId) ? st.defaultTableId : ""
       if (validDefaultTableId !== st.defaultTableId) await patchSettings({ defaultTableId: validDefaultTableId })
       setSettings({ ...st, loggedIn: true, defaultTableId: validDefaultTableId, userEmail: authState.user?.email ?? st.userEmail, userName: authState.user?.name ?? st.userName, userAvatar: authState.user?.avatar_url ?? st.userAvatar })
-      setActiveTab("annotations")
 
-      const annotations = await getAnnotationsByUrl(info.url)
-      const nextItems: AnnotationPreview[] = annotations.map((a) => ({
+      const allAnnotations = await getAllAnnotations()
+      const choices = new Map<string, PageChoice>()
+      for (const annotation of allAnnotations) {
+        if (!annotation.url || choices.has(annotation.url)) continue
+        choices.set(annotation.url, { url: annotation.url, title: annotation.pageTitle || shortUrl(annotation.url) })
+      }
+      if (info.url && !choices.has(info.url)) choices.set(info.url, { url: info.url, title: info.title || shortUrl(info.url) })
+      setPageChoices(Array.from(choices.values()))
+      const targetUrl = forceCurrent ? info.url : (selectedPageUrl || info.url)
+      const visibleAnnotations = allAnnotations.filter((annotation) => annotation.url === targetUrl)
+      const nextItems: AnnotationPreview[] = visibleAnnotations.map((a) => ({
         id: a.id,
         selectedText: a.selectedText ?? "",
         title: a.title,
@@ -114,11 +139,49 @@ export default function SidePanel() {
             ? {
                 kind: "created",
                 taskId: a.task.taskId,
-                qtableUrl: a.task.qtableUrl
+                qtableUrl: a.task.qtableUrl,
+                tableId: a.task.tableId || tableIdFromQTableUrl(a.task.qtableUrl),
+                statusFieldId: a.task.statusFieldId,
+                statusFieldName: a.task.statusFieldName,
+                statusFieldType: a.task.statusFieldType,
+                statusValue: a.task.statusValue,
+                statusOptions: a.task.statusOptions
               }
             : { kind: "not_created" }
       }))
-      setItems(nextItems)
+      const hydratedItems = await Promise.all(nextItems.map(async (item) => {
+        if (item.task.kind !== "created" || !item.task.tableId) return item
+        try {
+          const remote = await getTaskStatus(item.task.taskId, item.task.tableId)
+          if (remote.status.value !== item.task.statusValue || remote.status.field_id !== item.task.statusFieldId) {
+            await updateAnnotationById(item.id, (annotation) => annotation.task?.status === "created" ? {
+              ...annotation,
+              task: {
+                ...annotation.task,
+                statusFieldId: remote.status.field_id,
+                statusFieldName: remote.status.field_name,
+                statusFieldType: remote.status.field_type,
+                statusValue: remote.status.value,
+                statusOptions: remote.status.options
+              }
+            } : annotation)
+          }
+          return {
+            ...item,
+            task: {
+              ...item.task,
+              statusFieldId: remote.status.field_id,
+              statusFieldName: remote.status.field_name,
+              statusFieldType: remote.status.field_type,
+              statusValue: remote.status.value,
+              statusOptions: remote.status.options
+            }
+          }
+        } catch {
+          return item
+        }
+      }))
+      setItems(hydratedItems)
     } catch (err) {
       if (err instanceof Error && err.message.includes("Not authenticated")) {
         setError("登录已过期，请重新登录")
@@ -130,7 +193,7 @@ export default function SidePanel() {
     } finally {
       setIsRefreshing(false)
     }
-  }, [])
+  }, [selectedPageUrl])
 
   const handleLogin = async () => {
     const email = loginEmail.trim()
@@ -146,6 +209,7 @@ export default function SidePanel() {
       setLoginPassword("")
       setSuccess("登录成功，正在加载你的数据表…")
       await refresh()
+      setActiveTab("annotations")
     } catch (err) {
       setError(err instanceof Error ? err.message : "登录失败")
     } finally {
@@ -153,8 +217,72 @@ export default function SidePanel() {
     }
   }
 
+  const handleStatusChange = async (annotationId: string, value: string) => {
+    const item = items.find((candidate) => candidate.id === annotationId)
+    if (!item || item.task.kind !== "created" || !item.task.tableId) {
+      setError("这条任务缺少 QTable 表格信息，请重新创建任务")
+      return
+    }
+    try {
+      const result = await updateTaskStatus({
+        taskId: item.task.taskId,
+        targetTableId: item.task.tableId,
+        statusFieldId: item.task.statusFieldId,
+        value
+      })
+      await updateAnnotationById(annotationId, (annotation) => ({
+        ...annotation,
+        task: annotation.task?.status === "created" ? {
+          ...annotation.task,
+          tableId: result.target_table_id,
+          statusFieldId: result.status.field_id,
+          statusFieldName: result.status.field_name,
+          statusFieldType: result.status.field_type,
+          statusValue: result.status.value,
+          statusOptions: result.status.options
+        } : annotation.task
+      }))
+      setItems((current) => current.map((candidate) => candidate.id === annotationId ? {
+        ...candidate,
+        task: candidate.task.kind === "created" ? {
+          ...candidate.task,
+          statusFieldId: result.status.field_id,
+          statusFieldName: result.status.field_name,
+          statusFieldType: result.status.field_type,
+          statusValue: result.status.value,
+          statusOptions: result.status.options
+        } : candidate.task
+      } : candidate))
+      setSuccess(`任务状态已更新为 ${result.status.options.find((option) => option.id === result.status.value)?.label || result.status.value}`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "更新任务状态失败")
+    }
+  }
+
   useEffect(() => {
     refresh()
+  }, [refresh])
+
+  useEffect(() => {
+    const onActivated = () => {
+      setSelectedPageUrl(null)
+      void refresh(true)
+    }
+    const onUpdated = (tabId: number, changeInfo: chrome.tabs.TabChangeInfo) => {
+      if (changeInfo.status !== "complete") return
+      void chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+        if (tab?.id === tabId) {
+          setSelectedPageUrl(null)
+          void refresh(true)
+        }
+      })
+    }
+    chrome.tabs.onActivated.addListener(onActivated)
+    chrome.tabs.onUpdated.addListener(onUpdated)
+    return () => {
+      chrome.tabs.onActivated.removeListener(onActivated)
+      chrome.tabs.onUpdated.removeListener(onUpdated)
+    }
   }, [refresh])
 
   // Listen for auth state changes from background script
@@ -217,13 +345,13 @@ export default function SidePanel() {
       if (message?.type === STORAGE_UPDATED) {
         const p = message.payload
         if (p?.key !== NSX_ANNOTATIONS_KEY) return
-        if (p.urls && pageInfo.url && !p.urls.includes(pageInfo.url)) return
+        if (p.urls && displayUrl && !p.urls.includes(displayUrl)) return
         refresh()
       }
     }
     chrome.runtime.onMessage.addListener(listener)
     return () => chrome.runtime.onMessage.removeListener(listener)
-  }, [pageInfo.url, refresh, isLoggedIn])
+  }, [displayUrl, pageInfo.url, refresh, isLoggedIn])
 
   return (
     <div className="min-h-screen bg-slate-50 pb-14 text-slate-900">
@@ -239,7 +367,7 @@ export default function SidePanel() {
             <button
               className="rounded border border-slate-200 bg-white px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 active:bg-slate-100 disabled:opacity-60"
               disabled={isRefreshing}
-              onClick={refresh}
+              onClick={() => void refresh()}
               type="button">
               {isRefreshing ? "刷新中…" : "刷新"}
             </button>
@@ -271,6 +399,22 @@ export default function SidePanel() {
           </div>
         </div>
 
+        {isLoggedIn && pageChoices.length > 0 ? (
+          <div className="border-t border-slate-100 px-3 pb-2">
+            <label className="sr-only" htmlFor="nsx-page-selector">切换批注网页</label>
+            <select
+              className="w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-xs font-medium text-slate-700 outline-none focus:border-indigo-400 focus:bg-white"
+              id="nsx-page-selector"
+              onChange={(e) => setSelectedPageUrl(e.target.value === "__current__" ? null : e.target.value)}
+              value={selectedPageUrl || "__current__"}>
+              <option value="__current__">当前网页：{pageInfo.title || shortUrl(pageInfo.url) || "未命名页面"}</option>
+              {pageChoices.filter((page) => page.url !== pageInfo.url).map((page) => (
+                <option key={page.url} value={page.url}>{page.title} · {shortUrl(page.url)}</option>
+              ))}
+            </select>
+          </div>
+        ) : null}
+
         <button
           className={`w-full border-t border-slate-200 px-3 py-2 text-left ${
             !isLoggedIn
@@ -299,7 +443,7 @@ export default function SidePanel() {
                   </div>
                   {!pageCollapsed ? (
                     <div className="truncate text-sm font-semibold">
-                      {pageInfo.title || "（未获取到标题）"}
+                      {displayTitle || "（未获取到标题）"}
                     </div>
                   ) : null}
                 </div>
@@ -322,7 +466,7 @@ export default function SidePanel() {
               <span>{error}</span>
               <button
                 className="rounded bg-white px-2 py-1 text-xs text-rose-700 hover:bg-rose-100"
-                onClick={refresh}
+                onClick={() => void refresh()}
                 type="button">
                 重试
               </button>
@@ -368,8 +512,9 @@ export default function SidePanel() {
                 </div>
               </div>
             ) : null}
-            <div className="mb-2 text-xs font-medium text-slate-500">
-              我的批注
+            <div className="mb-2 flex items-center justify-between text-xs font-medium text-slate-500">
+              <span>{selectedPageUrl ? "所选网页批注" : "当前网页批注"}</span>
+              <span>{shortUrl(displayUrl)}</span>
             </div>
             {isRefreshing && items.length === 0 ? (
               <div className="rounded border border-dashed border-slate-200 p-4 text-sm text-slate-500">
@@ -378,14 +523,16 @@ export default function SidePanel() {
             ) : (
               <AnnotationList
                 items={items}
+                onStatusChange={handleStatusChange}
                 onCreateTask={(annotationId) => {
                   const it = items.find((x) => x.id === annotationId)
                   if (!it) return
                   setPending({
                     annotationId,
-                    url: pageInfo.url,
+                    url: displayUrl,
                     selectedText: it.selectedText,
-                    title: it.title
+                    title: it.title,
+                    mode: it.mode
                   })
                   if (!isLoggedIn) {
                     setActiveTab("settings")
@@ -541,7 +688,13 @@ export default function SidePanel() {
               task: {
                 status: "created",
                 taskId: res.task_id,
-                qtableUrl: res.qtable_url
+                qtableUrl: res.qtable_url,
+                tableId: res.target_table_id || form.tableId,
+                statusFieldId: res.status?.field_id,
+                statusFieldName: res.status?.field_name,
+                statusFieldType: res.status?.field_type,
+                statusValue: res.status?.value,
+                statusOptions: res.status?.options
               }
             }))
             const tableName =
@@ -560,7 +713,7 @@ export default function SidePanel() {
       <div className="fixed bottom-0 left-0 right-0 z-10 border-t border-slate-200 bg-white/95 px-3 py-2 backdrop-blur">
         <div className="flex items-center justify-between gap-2">
           <div className="text-xs text-slate-500">
-            当前页批注 {items.length}
+            {selectedPageUrl ? "所选网页" : "当前网页"}批注 {items.length}
           </div>
           <button
             className="rounded bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500 active:bg-indigo-700 disabled:opacity-60"
@@ -575,8 +728,10 @@ export default function SidePanel() {
                   : `blank_${Date.now()}`
               setPending({
                 annotationId: id,
-                url: pageInfo.url,
-                selectedText: ""
+                url: displayUrl,
+                selectedText: "",
+                title: "",
+                mode: "highlight"
               })
               setTaskDialogOpen(true)
             }}

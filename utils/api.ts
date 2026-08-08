@@ -93,6 +93,39 @@ export type CreateTaskFromAnnotationResponse = {
   task_id: string
   qtable_url: string
   annotation_status: "task_created"
+  target_table_id?: string
+  status?: QTableTaskStatus
+}
+
+export type QTableTaskStatus = {
+  field_id: string
+  field_name: string
+  field_type: string
+  options: { id: string; label: string }[]
+  value?: string
+}
+
+export type UpdateTaskStatusInput = {
+  taskId: string
+  targetTableId: string
+  statusFieldId?: string
+  value: string
+}
+
+export type UpdateTaskStatusResponse = {
+  task_id: string
+  target_table_id: string
+  status: QTableTaskStatus
+}
+
+export const getTaskStatus = async (
+  taskId: string,
+  targetTableId: string
+): Promise<UpdateTaskStatusResponse> => {
+  const response = await authenticatedFetch(QTABLE_API_BASE_URL + "/api/clipper/tasks/" + encodeURIComponent(taskId) + "/status?target_table_id=" + encodeURIComponent(targetTableId))
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(data.detail || "读取 QTable 任务状态失败")
+  return data as UpdateTaskStatusResponse
 }
 
 type StoredTask = {
@@ -202,6 +235,22 @@ export const createTaskFromAnnotation = async (
   //   throw errorData
   // }
   // return await response.json()
+}
+
+export const updateTaskStatus = async (
+  input: UpdateTaskStatusInput
+): Promise<UpdateTaskStatusResponse> => {
+  const response = await authenticatedFetch(`${QTABLE_API_BASE_URL}/api/clipper/tasks/${encodeURIComponent(input.taskId)}/status`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      target_table_id: input.targetTableId,
+      status_field_id: input.statusFieldId,
+      value: input.value
+    })
+  })
+  const data = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(data.detail || "更新 QTable 任务状态失败")
+  return data as UpdateTaskStatusResponse
 }
 
 export type UserMe = {

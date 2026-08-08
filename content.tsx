@@ -59,6 +59,7 @@ type DraftAnnotation = {
   mode: AnnotationMode
   box?: { left: number; top: number; width: number; height: number }
   line?: { x: number; y: number }[]
+  shapeAnchor?: { left: number; top: number; width: number; height: number }
   screenshotDataUrl?: string
 }
 
@@ -93,6 +94,16 @@ const getTextAndRangeInBox = (box: Box): { text: string; range: Range | null } =
     }
   }
   return { text: chunks.join(" ").trim().slice(0, 4000), range: firstRange }
+}
+
+const getDocumentBounds = (range: Range): Box | null => {
+  const rects = getMergedClientRects(range)
+  if (!rects.length) return null
+  const left = Math.min(...rects.map((rect) => rect.left)) + window.scrollX
+  const top = Math.min(...rects.map((rect) => rect.top)) + window.scrollY
+  const right = Math.max(...rects.map((rect) => rect.right)) + window.scrollX
+  const bottom = Math.max(...rects.map((rect) => rect.bottom)) + window.scrollY
+  return { left, top, width: right - left, height: bottom - top }
 }
 
 type CardState =
@@ -233,29 +244,43 @@ export default function Content() {
       const annotations = await getAnnotationsByUrl(url)
       const next: HighlightRect[] = []
       for (const a of annotations) {
+        const located = a.mode === "line" || a.mode === "box" ? locateRangeFromFingerprint({
+          selectedText: a.selectedText,
+          xpath: a.anchor.xpath,
+          prefix: a.anchor.prefix,
+          suffix: a.anchor.suffix,
+          context: a.anchor.context
+        }) : null
+        const currentAnchor = located?.range ? getDocumentBounds(located.range) : null
         if (a.mode === "line" && a.line?.length) {
-          next.push({ id: a.id, rects: [], status: "ok", mode: "line", line: a.line })
+          const line = a.shapeAnchor && currentAnchor
+            ? a.line.map((point) => ({ x: currentAnchor.left + point.x - a.shapeAnchor.left, y: currentAnchor.top + point.y - a.shapeAnchor.top }))
+            : a.line
+          next.push({ id: a.id, rects: [], status: located?.status || "ok", mode: "line", line })
           continue
         }
         if (a.mode === "box" && a.box) {
-          next.push({ id: a.id, rects: [], status: "ok", mode: "box", box: a.box })
+          const box = a.shapeAnchor && currentAnchor
+            ? { left: currentAnchor.left + a.box.left - a.shapeAnchor.left, top: currentAnchor.top + a.box.top - a.shapeAnchor.top, width: a.box.width, height: a.box.height }
+            : a.box
+          next.push({ id: a.id, rects: [], status: located?.status || "ok", mode: "box", box })
           continue
         }
-        const located = locateRangeFromFingerprint({
+        const textLocated = locateRangeFromFingerprint({
           selectedText: a.selectedText,
           xpath: a.anchor.xpath,
           prefix: a.anchor.prefix,
           suffix: a.anchor.suffix,
           context: a.anchor.context
         })
-        if (!located.range) {
-          next.push({ id: a.id, rects: [], status: located.status, mode: a.mode === "underline" ? "underline" : "highlight" })
+        if (!textLocated.range) {
+          next.push({ id: a.id, rects: [], status: textLocated.status, mode: a.mode === "underline" ? "underline" : "highlight" })
           continue
         }
         next.push({
           id: a.id,
-          rects: getMergedClientRects(located.range),
-          status: located.status,
+          rects: getMergedClientRects(textLocated.range),
+          status: textLocated.status,
           mode: a.mode === "underline" ? "underline" : "highlight"
         })
       }
@@ -317,12 +342,13 @@ export default function Content() {
         }
         const captured = getTextAndRangeInBox(box)
         const fingerprint = captured.range ? createFingerprintFromRange(captured.range) : null
+        const shapeAnchor = captured.range ? getDocumentBounds(captured.range) : undefined
         const docBox = { left: box.left + window.scrollX, top: box.top + window.scrollY, width: box.width, height: box.height }
         const screenshotDataUrl = await captureAnnotationImage(box, { kind: "box", rect: box }).catch(() => undefined)
         setBoxPreview(null)
         const draft: DraftAnnotation = {
           id: genId(), url, pageTitle: document.title || "", createdAt: Date.now(),
-          selectedText: captured.text || "页面框选", anchor: fingerprint || { selectedText: captured.text || "页面框选", xpath: "", prefix: "", suffix: "", context: "" }, locateStatus: "ok", mode: "box", box: docBox, screenshotDataUrl
+          selectedText: captured.text || "页面框选", anchor: fingerprint || { selectedText: captured.text || "页面框选", xpath: "", prefix: "", suffix: "", context: "" }, locateStatus: "ok", mode: "box", box: docBox, shapeAnchor, screenshotDataUrl
         }
         const cardPos = computeCardPositionFromBubble({ x: box.left, y: box.top })
         setCard({ visible: true, x: cardPos.x, y: cardPos.y, arrowSide: cardPos.arrowSide, draft })
@@ -346,13 +372,14 @@ export default function Content() {
         }
         const captured = getTextAndRangeInBox(bounds)
         const fingerprint = captured.range ? createFingerprintFromRange(captured.range) : null
+        const shapeAnchor = captured.range ? getDocumentBounds(captured.range) : undefined
         const screenshotDataUrl = await captureAnnotationImage(bounds, { kind: "line", points }).catch(() => undefined)
         setLinePreview(null)
         const draft: DraftAnnotation = {
           id: genId(), url, pageTitle: document.title || "", createdAt: Date.now(),
           selectedText: captured.text || "手绘划线", anchor: fingerprint || { selectedText: captured.text || "手绘划线", xpath: "", prefix: "", suffix: "", context: "" },
           locateStatus: "ok", mode: "line",
-          line: points.map((point) => ({ x: point.x + window.scrollX, y: point.y + window.scrollY })), screenshotDataUrl
+          line: points.map((point) => ({ x: point.x + window.scrollX, y: point.y + window.scrollY })), shapeAnchor, screenshotDataUrl
         }
         const cardPos = computeCardPositionFromBubble({ x: points[0].x, y: points[0].y })
         setCard({ visible: true, x: cardPos.x, y: cardPos.y, arrowSide: cardPos.arrowSide, draft })
@@ -383,7 +410,6 @@ export default function Content() {
 
     const onScrollOrResize = () => {
       setBubble({ visible: false })
-      setCard({ visible: false })
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current)
       rafRef.current = requestAnimationFrame(() => {
         refreshHighlights()
@@ -547,9 +573,10 @@ export default function Content() {
           selectedText: draft.selectedText,
           title: input.title.trim(),
           note: input.note,
-          mode: draft.mode,
-          box: draft.box,
-          line: draft.line,
+      mode: draft.mode,
+      box: draft.box,
+      line: draft.line,
+      shapeAnchor: draft.shapeAnchor,
           anchor: draft.anchor,
           locateStatus: draft.locateStatus
         }
@@ -621,7 +648,7 @@ export default function Content() {
           onCreateTask={async (input) => {
             const draft = card.draft
             await saveDraft(draft, input)
-            const response = await requestFromBackground<{ ok: boolean; task?: { task_id: string; qtable_url: string }; error?: string }>({
+            const response = await requestFromBackground<{ ok: boolean; task?: { task_id: string; qtable_url: string; target_table_id?: string; status?: { field_id: string; field_name: string; field_type: string; options: { id: string; label: string }[]; value?: string } }; error?: string }>({
               type: CLIPPER_CREATE_TASK,
               payload: {
                 annotationId: draft.id,
@@ -641,7 +668,17 @@ export default function Content() {
             if (!response.ok || !response.task) throw new Error(response.error || "创建任务失败")
             await updateAnnotationById(draft.id, (annotation) => ({
               ...annotation,
-              task: { status: "created", taskId: response.task!.task_id, qtableUrl: response.task!.qtable_url }
+              task: {
+                status: "created",
+                taskId: response.task!.task_id,
+                qtableUrl: response.task!.qtable_url,
+                tableId: response.task!.target_table_id || input.tableId,
+                statusFieldId: response.task!.status?.field_id,
+                statusFieldName: response.task!.status?.field_name,
+                statusFieldType: response.task!.status?.field_type,
+                statusValue: response.task!.status?.value,
+                statusOptions: response.task!.status?.options
+              }
             }))
           }}
           onSave={async (input) => {
@@ -658,9 +695,17 @@ export default function Content() {
       {boxPreview ? (
         <div className="pointer-events-none fixed border-2 border-indigo-500 bg-indigo-200/20" style={{ left: boxPreview.left, top: boxPreview.top, width: boxPreview.width, height: boxPreview.height, zIndex: 2147483645 }} />
       ) : null}
-      {linePreview && linePreview.length > 1 ? (
+        {linePreview && linePreview.length > 1 ? (
         <svg className="pointer-events-none fixed inset-0 h-full w-full" style={{ zIndex: 2147483645 }}>
           <polyline fill="none" points={linePreview.map((point) => `${point.x},${point.y}`).join(" ")} stroke="#ef4444" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" />
+        </svg>
+        ) : null}
+      {card.visible && card.draft.box ? (
+        <div className="pointer-events-none fixed border-2 border-indigo-500 bg-indigo-200/20" style={{ left: card.draft.box.left - window.scrollX, top: card.draft.box.top - window.scrollY, width: card.draft.box.width, height: card.draft.box.height, zIndex: 2147483645 }} />
+      ) : null}
+      {card.visible && card.draft.line && card.draft.line.length > 1 ? (
+        <svg className="pointer-events-none fixed inset-0 h-full w-full" style={{ zIndex: 2147483645 }}>
+          <polyline fill="none" points={card.draft.line.map((point) => `${point.x - window.scrollX},${point.y - window.scrollY}`).join(" ")} stroke="#ef4444" strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" />
         </svg>
       ) : null}
     </div>
