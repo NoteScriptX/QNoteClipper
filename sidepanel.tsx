@@ -112,27 +112,9 @@ export default function SidePanel() {
       setQtables(qts)
       setQtableUsers(await getQtableUsers())
 
-      const st = await getSettings()
-      const nextSettings =
-        authState.isAuthenticated && authState.user
-          ? await patchSettings({
-              loggedIn: true,
-              userEmail: authState.user.email,
-              userName: authState.user.name,
-              userAvatar: authState.user.avatar_url
-            })
-          : authState.isAuthenticated
-            ? await patchSettings({ loggedIn: true })
-            : st.loggedIn
-              ? await patchSettings({
-                  loggedIn: false,
-                  userEmail: undefined,
-                  userName: undefined,
-                  userAvatar: undefined
-                })
-              : st
-      setSettings(nextSettings)
-      setLoginEmail((v) => v || nextSettings.userEmail || "")
+      const validDefaultTableId = qts.some((table) => table.id === st.defaultTableId) ? st.defaultTableId : ""
+      if (validDefaultTableId !== st.defaultTableId) await patchSettings({ defaultTableId: validDefaultTableId })
+      setSettings({ ...st, loggedIn: true, defaultTableId: validDefaultTableId, userEmail: authState.user?.email ?? st.userEmail, userName: authState.user?.name ?? st.userName, userAvatar: authState.user?.avatar_url ?? st.userAvatar })
 
       const allAnnotations = await getAllAnnotations()
       const choices = new Map<string, PageChoice>()
