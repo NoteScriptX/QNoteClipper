@@ -14,8 +14,8 @@ import { TaskForm } from "~components/TaskForm";
 import { createTaskFromAnnotation, getQtables, getQtableUsers, getTaskStatus, updateTaskStatus, type QTable, type QTableUser } from "~utils/api";
 import { CONTENT_OPEN_SIDEPANEL_WITH_ANNOTATION, STORAGE_UPDATED, type BackgroundBroadcastMessage, type OpenSidePanelPayload } from "~utils/messaging";
 import { getSettings, patchSettings, type NsXSettings } from "~utils/settings";
-import { getAnnotationById, getAnnotationsByUrl, NSX_ANNOTATIONS_KEY, updateAnnotationById } from "~utils/storage";
-import { getAuthState, loginWithEmailPassword } from "~utils/auth";
+import { getAllAnnotations, getAnnotationById, NSX_ANNOTATIONS_KEY, updateAnnotationById } from "~utils/storage";
+import { getAuthState } from "~utils/auth";
 
 
 
@@ -655,7 +655,6 @@ export default function SidePanel() {
                     type="button">
                     退出登录
                   </button>
-<<<<<<< HEAD
                 ) : <div className="text-xs text-slate-500">请在下方输入账号登录</div>}
               </div>
             </div>
@@ -671,80 +670,6 @@ export default function SidePanel() {
                 </div>
                 <div className="mt-2 text-xs text-slate-500">账号密码只用于登录本地 QTable 服务，不会打开浏览器弹窗。</div>
               </div>
-=======
-                ) : (
-                  <div className="text-xs text-slate-500">请在下方输入账号密码登录</div>
-                )}
-              </div>
-            </div>
-            {settings?.loggedIn === false ? (
-              <form
-                className="mt-3 space-y-3"
-                onSubmit={async (e) => {
-                  e.preventDefault()
-                  const baseUrl = (settings?.apiEndpoint || "http://localhost:8000").trim()
-                  const email = loginEmail.trim()
-                  const password = loginPassword
-                  if (!email || !password) {
-                    setError("请输入邮箱和密码")
-                    return
-                  }
-                  try {
-                    setIsLoggingIn(true)
-                    setError(null)
-                    await loginWithEmailPassword({
-                      baseUrl,
-                      email,
-                      password
-                    })
-                    const next = await patchSettings({
-                      loggedIn: true,
-                      userEmail: email,
-                      userName: email,
-                      userAvatar: undefined
-                    })
-                    setSettings(next)
-                    setLoginPassword("")
-                    setSuccess("登录成功")
-                    await refresh()
-                  } catch (err) {
-                    setError(err instanceof Error ? err.message : "登录失败")
-                  } finally {
-                    setIsLoggingIn(false)
-                  }
-                }}>
-                <div>
-                  <div className="text-xs font-medium text-slate-500">邮箱</div>
-                  <input
-                    autoComplete="username"
-                    className="mt-1 w-full rounded border border-slate-200 px-2 py-1 text-sm outline-none focus:border-slate-400"
-                    onChange={(e) => setLoginEmail(e.target.value)}
-                    placeholder="admin@admin.com"
-                    type="email"
-                    value={loginEmail}
-                  />
-                </div>
-                <div>
-                  <div className="text-xs font-medium text-slate-500">密码</div>
-                  <input
-                    autoComplete="current-password"
-                    className="mt-1 w-full rounded border border-slate-200 px-2 py-1 text-sm outline-none focus:border-slate-400"
-                    onChange={(e) => setLoginPassword(e.target.value)}
-                    placeholder="admin"
-                    type="password"
-                    value={loginPassword}
-                  />
-                </div>
-                <div className="flex items-center justify-end">
-                  <button
-                    className="rounded bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500 active:bg-indigo-700 disabled:opacity-60"
-                    disabled={isLoggingIn}
-                    type="submit">
-                    {isLoggingIn ? "登录中..." : "登录"}
-                  </button>
-                </div>
-              </form>
->>>>>>> b143e567c8389f1410f46b5d1b7912865b4061d4
             ) : null}
           </div>
         )}
