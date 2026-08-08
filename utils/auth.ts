@@ -44,6 +44,25 @@ export type AuthState = {
   error: string | null
 }
 
+const decodeBase64Url = (input: string): string => {
+  const base64 = input.replace(/-/g, "+").replace(/_/g, "/")
+  const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), "=")
+  return atob(padded)
+}
+
+const parseJwtExpMs = (token: string): number | null => {
+  try {
+    const parts = token.split(".")
+    if (parts.length < 2) return null
+    const payloadRaw = decodeBase64Url(parts[1])
+    const payload = JSON.parse(payloadRaw) as { exp?: unknown }
+    if (typeof payload.exp !== "number") return null
+    return payload.exp * 1000
+  } catch {
+    return null
+  }
+}
+
 /**
  * Generate a cryptographically random base64url-encoded string
  */
@@ -249,9 +268,10 @@ async function storeTokens(tokens: {
   refresh_token?: string
   expires_in?: number
 }): Promise<void> {
-  const expiresAt = tokens.expires_in
-    ? Date.now() + tokens.expires_in * 1000
-    : Date.now() + 3600 * 1000 // Default 1 hour
+  const expiresAt =
+    typeof tokens.expires_in === "number"
+      ? Date.now() + tokens.expires_in * 1000
+      : parseJwtExpMs(tokens.access_token) ?? Date.now() + 3600 * 1000
 
   const storageData: Record<string, any> = {
     [STORAGE_KEYS.ACCESS_TOKEN]: tokens.access_token,
@@ -406,6 +426,60 @@ export async function getAuthState(): Promise<AuthState> {
     user: userInfo || null,
     error: null
   }
+}
+
+export async function loginWithEmailPassword(input: {
+  baseUrl: string
+  email: string
+  password: string
+}): Promise<void> {
+  const baseUrl = input.baseUrl.replace(/\/+$/, "")
+  const response = await fetch(`${baseUrl}/auth/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      email: input.email,
+      password: input.password
+    })
+  })
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "")
+    let message = `登录失败（${response.status}）`
+    try {
+      const parsed = JSON.parse(text) as any
+      message =
+        typeof parsed?.message === "string"
+          ? parsed.message
+          : typeof parsed?.detail === "string"
+            ? parsed.detail
+            : message
+    } catch {
+      if (text.trim()) message = text
+    }
+    throw new Error(message)
+  }
+
+  const data = (await response.json().catch(() => null)) as
+    | { access_token?: unknown; token_type?: unknown }
+    | null
+
+  const accessToken = typeof data?.access_token === "string" ? data.access_token : ""
+  if (!accessToken) throw new Error("登录失败：未返回 access_token")
+
+  await storeTokens({ access_token: accessToken })
+
+  const userInfo: UserInfo = {
+    id: input.email,
+    name: input.email,
+    email: input.email
+  }
+
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.USER_INFO]: userInfo
+  })
 }
 
 /**
