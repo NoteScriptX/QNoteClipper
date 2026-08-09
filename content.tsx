@@ -8,7 +8,7 @@ import { AnnotationCard } from "~components/AnnotationCard";
 import { Bubble } from "~components/Bubble";
 import { createFingerprintFromRange, createFingerprintFromSelection, getMergedClientRects, locateRangeFromFingerprint } from "~utils/anchor";
 import { CLIPPER_CAPTURE_ANNOTATION_IMAGE, CLIPPER_CREATE_TASK, CLIPPER_GET_TASK_OPTIONS, CONTENT_ACTIVATE_DRAW_MODE, CONTENT_OPEN_SELECTION_CARD, requestFromBackground, STORAGE_UPDATED } from "~utils/messaging";
-import { getAnnotationsByUrl, NSX_ANNOTATIONS_KEY, updateAnnotationById, upsertAnnotation, type AnnotationMode, type NsXAnnotation } from "~utils/storage";
+import { getAnnotationsByUrl, normalizePageUrl, NSX_ANNOTATIONS_KEY, updateAnnotationById, upsertAnnotation, type AnnotationMode, type NsXAnnotation } from "~utils/storage";
 import type { QTable, QTableUser } from "~utils/api";
 
 
@@ -230,9 +230,17 @@ export default function Content() {
   const drawModeRef = useRef<"line" | "box" | null>(null)
   const boxStartRef = useRef<{ x: number; y: number } | null>(null)
   const linePointsRef = useRef<{ x: number; y: number }[] | null>(null)
+  const traceHandledRef = useRef(false)
   const [taskOptions, setTaskOptions] = useState<{ tables: QTable[]; users: QTableUser[]; error?: string; loading: boolean }>({ tables: [], users: [], loading: false })
 
-  const url = useMemo(() => window.location.href, [])
+  const url = useMemo(() => normalizePageUrl(window.location.href), [])
+  const traceAnnotationId = useMemo(() => {
+    try {
+      return new URL(window.location.href).searchParams.get("qnote_annotation")
+    } catch {
+      return null
+    }
+  }, [])
 
   const captureAnnotationImage = useCallback(async (rect: Box, overlay?: { kind: "box"; rect: Box } | { kind: "line"; points: { x: number; y: number }[] }): Promise<string | undefined> => {
     const response = await requestFromBackground<{ ok: boolean; dataUrl?: string }>({ type: CLIPPER_CAPTURE_ANNOTATION_IMAGE, rect, overlay })
@@ -252,6 +260,10 @@ export default function Content() {
           context: a.anchor.context
         }) : null
         const currentAnchor = located?.range ? getDocumentBounds(located.range) : null
+        if (!traceHandledRef.current && traceAnnotationId && a.serverId === traceAnnotationId && located?.range) {
+          located.range.startContainer.parentElement?.scrollIntoView({ behavior: "smooth", block: "center" })
+          traceHandledRef.current = true
+        }
         if (a.mode === "line" && a.line?.length) {
           const line = a.shapeAnchor && currentAnchor
             ? a.line.map((point) => ({ x: currentAnchor.left + point.x - a.shapeAnchor.left, y: currentAnchor.top + point.y - a.shapeAnchor.top }))
@@ -288,7 +300,7 @@ export default function Content() {
     } catch {
       // ignore
     }
-  }, [url])
+  }, [traceAnnotationId, url])
 
   useEffect(() => {
     refreshHighlights()
@@ -577,6 +589,7 @@ export default function Content() {
       box: draft.box,
       line: draft.line,
       shapeAnchor: draft.shapeAnchor,
+      screenshotDataUrl: draft.screenshotDataUrl,
           anchor: draft.anchor,
           locateStatus: draft.locateStatus
         }

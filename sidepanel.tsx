@@ -11,10 +11,10 @@ import "~style.css";
 
 import { AnnotationList, type AnnotationPreview } from "~components/AnnotationList";
 import { TaskForm } from "~components/TaskForm";
-import { createTaskFromAnnotation, getQtables, getQtableUsers, getTaskStatus, updateTaskStatus, type QTable, type QTableUser } from "~utils/api";
+import { createTaskFromAnnotation, getQtables, getQtableUsers, getTaskStatus, hydrateAnnotationsFromQNote, updateTaskStatus, type QTable, type QTableUser } from "~utils/api";
 import { CONTENT_OPEN_SIDEPANEL_WITH_ANNOTATION, STORAGE_UPDATED, type BackgroundBroadcastMessage, type OpenSidePanelPayload } from "~utils/messaging";
 import { getSettings, patchSettings, type NsXSettings } from "~utils/settings";
-import { getAllAnnotations, getAnnotationById, NSX_ANNOTATIONS_KEY, updateAnnotationById } from "~utils/storage";
+import { getAllAnnotations, getAnnotationById, normalizePageUrl, NSX_ANNOTATIONS_KEY, updateAnnotationById } from "~utils/storage";
 import { getAuthState } from "~utils/auth";
 
 
@@ -36,7 +36,7 @@ const getCurrentPageInfo = async (): Promise<PageInfo> => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
   return {
     title: tab?.title ?? "",
-    url: tab?.url ?? "",
+    url: normalizePageUrl(tab?.url ?? ""),
     faviconUrl: tab?.favIconUrl ?? undefined
   }
 }
@@ -112,6 +112,18 @@ export default function SidePanel() {
       setQtables(qts)
       setQtableUsers(await getQtableUsers())
 
+      // Pull the authoritative server copy before rendering. QNote outages do
+      // not block access to the extension's offline cache.
+      try {
+        if (info.url) await hydrateAnnotationsFromQNote(info.url)
+        if (selectedPageUrl && selectedPageUrl !== info.url) {
+          await hydrateAnnotationsFromQNote(selectedPageUrl)
+        }
+      } catch {
+        // Offline-first: pending local captures remain available and will sync
+        // automatically when the service is reachable again.
+      }
+
       const validDefaultTableId = qts.some((table) => table.id === st.defaultTableId) ? st.defaultTableId : ""
       if (validDefaultTableId !== st.defaultTableId) await patchSettings({ defaultTableId: validDefaultTableId })
       setSettings({ ...st, loggedIn: true, defaultTableId: validDefaultTableId, userEmail: authState.user?.email ?? st.userEmail, userName: authState.user?.name ?? st.userName, userAvatar: authState.user?.avatar_url ?? st.userAvatar })
@@ -125,7 +137,10 @@ export default function SidePanel() {
       if (info.url && !choices.has(info.url)) choices.set(info.url, { url: info.url, title: info.title || shortUrl(info.url) })
       setPageChoices(Array.from(choices.values()))
       const targetUrl = forceCurrent ? info.url : (selectedPageUrl || info.url)
-      const visibleAnnotations = allAnnotations.filter((annotation) => annotation.url === targetUrl)
+      const normalizedTarget = normalizePageUrl(targetUrl)
+      const visibleAnnotations = allAnnotations.filter(
+        (annotation) => normalizePageUrl(annotation.url) === normalizedTarget
+      )
       const nextItems: AnnotationPreview[] = visibleAnnotations.map((a) => ({
         id: a.id,
         selectedText: a.selectedText ?? "",

@@ -4,13 +4,18 @@
  */
 
 // Configuration - Update these values for your QTable deployment
+export const QTABLE_API_BASE_URL =
+  process.env.PLASMO_PUBLIC_QTABLE_API_URL || "http://localhost:9000"
+export const QTABLE_WEB_BASE_URL =
+  process.env.PLASMO_PUBLIC_QTABLE_WEB_URL || "http://localhost:9100"
+
 const OAUTH_CONFIG = {
   // QTable Web OAuth authorization endpoint
-  AUTHORIZATION_ENDPOINT: "http://localhost:9000/oauth/authorize",
+  AUTHORIZATION_ENDPOINT: `${QTABLE_WEB_BASE_URL}/oauth/authorize`,
   // QTable Web token endpoint
-  TOKEN_ENDPOINT: "http://localhost:9000/oauth/token",
+  TOKEN_ENDPOINT: `${QTABLE_API_BASE_URL}/oauth/token`,
   // User info endpoint (optional)
-  USER_INFO_ENDPOINT: "http://localhost:9000/oauth/me",
+  USER_INFO_ENDPOINT: `${QTABLE_API_BASE_URL}/oauth/me`,
   // OAuth client ID registered in QTable
   CLIENT_ID: "note-script-clipper",
   // Requested scopes
@@ -18,8 +23,6 @@ const OAUTH_CONFIG = {
   // Set to true to use mock authentication for testing
   USE_MOCK_AUTH: false
 }
-
-export const QTABLE_API_BASE_URL = "http://localhost:9000"
 
 // Storage keys
 const STORAGE_KEYS = {

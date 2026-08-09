@@ -10,10 +10,40 @@ import {
   type ClipperCreateTaskMessage,
   type ContentToBackgroundMessage
 } from "~utils/messaging"
-import { NSX_ANNOTATIONS_KEY, type NsXAnnotation } from "~utils/storage"
+import { getAllAnnotations, markAnnotationSyncError, NSX_ANNOTATIONS_KEY, type NsXAnnotation } from "~utils/storage"
 import { getAuthState, loginWithPassword, logout as authLogout, getValidAccessToken } from "~utils/auth"
 import { patchSettings } from "~utils/settings"
-import { createTaskFromAnnotation, getQtableUsers, getQtables } from "~utils/api"
+import { createTaskFromAnnotation, getQtableUsers, getQtables, hydrateAnnotationsFromQNote, syncAnnotationToQNote } from "~utils/api"
+
+const syncInFlight = new Set<string>()
+
+const syncPendingAnnotations = async (ids?: string[]) => {
+  if (!(await getValidAccessToken())) return
+  const requested = ids ? new Set(ids) : null
+  const annotations = await getAllAnnotations()
+  const pending = annotations
+    .filter((annotation) => annotation.syncStatus === "pending" || annotation.syncStatus === "error")
+    .filter((annotation) => !requested || requested.has(annotation.id))
+  for (let offset = 0; offset < pending.length; offset += 4) {
+    await Promise.all(
+      pending.slice(offset, offset + 4).map(async (annotation) => {
+        if (syncInFlight.has(annotation.id)) return
+        syncInFlight.add(annotation.id)
+        try {
+          await syncAnnotationToQNote(annotation)
+        } catch (error) {
+          console.warn("QNote annotation sync failed", annotation.id, error)
+          await markAnnotationSyncError(
+            annotation.id,
+            error instanceof Error ? error.message : "QNote 同步失败"
+          )
+        } finally {
+          syncInFlight.delete(annotation.id)
+        }
+      })
+    )
+  }
+}
 
 // Open side panel when extension icon is clicked
 chrome.action.onClicked.addListener(async (tab) => {
@@ -186,6 +216,7 @@ chrome.runtime.onMessage.addListener(
               userAvatar: authState.user.avatar_url
             })
           }
+          await syncPendingAnnotations()
           // Notify sidepanel to refresh
           chrome.runtime.sendMessage({ type: "AUTH_STATE_CHANGED" })
           sendResponse({ ok: true })
@@ -266,6 +297,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   const { urls, ids } = diffAnnotationUrls(change.oldValue, change.newValue)
 
   ;(async () => {
+    if (ids.length) await syncPendingAnnotations(ids)
     try {
       await broadcastFromExtension({
         type: STORAGE_UPDATED,
@@ -281,8 +313,21 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   })()
 })
 
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status !== "complete" || !tab.url || !/^https?:\/\//.test(tab.url)) return
+  ;(async () => {
+    try {
+      if (!(await getValidAccessToken())) return
+      await hydrateAnnotationsFromQNote(tab.url!)
+    } catch (error) {
+      console.debug("QNote page hydration skipped", tabId, error)
+    }
+  })()
+})
+
 // Set up periodic token refresh check (every 30 minutes)
 chrome.alarms.create("tokenRefreshCheck", { periodInMinutes: 30 })
+chrome.alarms.create("qnoteAnnotationSync", { periodInMinutes: 5 })
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "tokenRefreshCheck") {
@@ -294,5 +339,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
         console.error("Token refresh check failed:", error)
       }
     })()
+  }
+  if (alarm.name === "qnoteAnnotationSync") {
+    void syncPendingAnnotations()
   }
 })

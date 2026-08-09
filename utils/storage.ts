@@ -1,5 +1,16 @@
 export const NSX_ANNOTATIONS_KEY = "nsx_annotations_v1"
 
+export const normalizePageUrl = (value: string): string => {
+  try {
+    const url = new URL(value)
+    url.searchParams.delete("qnote_annotation")
+    url.hash = ""
+    return url.toString()
+  } catch {
+    return value
+  }
+}
+
 export type AnnotationMode = "highlight" | "line" | "box" | "underline"
 
 export type NsXAnnotation = {
@@ -14,6 +25,7 @@ export type NsXAnnotation = {
   box?: { left: number; top: number; width: number; height: number }
   line?: { x: number; y: number }[]
   shapeAnchor?: { left: number; top: number; width: number; height: number }
+  screenshotDataUrl?: string
   task?: {
     status: "created"
     taskId: string
@@ -32,6 +44,13 @@ export type NsXAnnotation = {
     context: string
   }
   locateStatus?: "ok" | "maybe_lost"
+  serverId?: string
+  serverVersion?: number
+  workspaceId?: string
+  assetId?: string
+  syncStatus?: "pending" | "syncing" | "synced" | "error"
+  syncError?: string
+  pendingTaskMutationId?: string
 }
 
 export const getAllAnnotations = async (): Promise<NsXAnnotation[]> => {
@@ -60,7 +79,8 @@ export const getAnnotationsByUrl = async (
   url: string
 ): Promise<NsXAnnotation[]> => {
   const all = await getAllAnnotations()
-  return all.filter((a) => a.url === url)
+  const normalized = normalizePageUrl(url)
+  return all.filter((a) => normalizePageUrl(a.url) === normalized)
 }
 
 export const upsertAnnotation = async (
@@ -69,8 +89,9 @@ export const upsertAnnotation = async (
   const all = await getAllAnnotations()
   const next = [...all]
   const idx = next.findIndex((a) => a.id === annotation.id)
-  if (idx >= 0) next[idx] = annotation
-  else next.unshift(annotation)
+  const pending = { ...annotation, syncStatus: "pending" as const, syncError: undefined }
+  if (idx >= 0) next[idx] = pending
+  else next.unshift(pending)
   await setAllAnnotations(next)
 }
 
@@ -82,6 +103,63 @@ export const updateAnnotationById = async (
   const idx = all.findIndex((a) => a.id === id)
   if (idx < 0) return
   const next = [...all]
-  next[idx] = updater(next[idx])
+  next[idx] = {
+    ...updater(next[idx]),
+    syncStatus: "pending",
+    syncError: undefined
+  }
+  await setAllAnnotations(next)
+}
+
+export const applyServerAnnotation = async (
+  annotation: NsXAnnotation
+): Promise<void> => {
+  const all = await getAllAnnotations()
+  const next = [...all]
+  const idx = next.findIndex(
+    (item) => item.id === annotation.id ||
+      (annotation.serverId && item.serverId === annotation.serverId)
+  )
+  const synced = { ...annotation, syncStatus: "synced" as const, syncError: undefined }
+  if (idx >= 0) next[idx] = { ...next[idx], ...synced }
+  else next.unshift(synced)
+  await setAllAnnotations(next)
+}
+
+export const applyServerAnnotations = async (
+  annotations: NsXAnnotation[]
+): Promise<void> => {
+  if (!annotations.length) return
+  const current = await getAllAnnotations()
+  const next = [...current]
+  for (const annotation of annotations) {
+    const idx = next.findIndex(
+      (item) => item.id === annotation.id ||
+        (annotation.serverId && item.serverId === annotation.serverId)
+    )
+    const synced = {
+      ...annotation,
+      syncStatus: "synced" as const,
+      syncError: undefined
+    }
+    if (idx >= 0) next[idx] = { ...next[idx], ...synced }
+    else next.unshift(synced)
+  }
+  await setAllAnnotations(next)
+}
+
+export const markAnnotationSyncError = async (
+  id: string,
+  message: string
+): Promise<void> => {
+  const all = await getAllAnnotations()
+  const idx = all.findIndex((annotation) => annotation.id === id)
+  if (idx < 0) return
+  const next = [...all]
+  next[idx] = {
+    ...next[idx],
+    syncStatus: "error",
+    syncError: message.slice(0, 500)
+  }
   await setAllAnnotations(next)
 }
