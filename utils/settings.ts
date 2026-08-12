@@ -2,8 +2,6 @@ export const NSX_SETTINGS_KEY = "nsx_settings_v1"
 
 export type NsXSettings = {
   loggedIn: boolean
-  apiEndpoint: string
-  defaultTableId: string
   userEmail?: string
   userName?: string
   userAvatar?: string
@@ -15,8 +13,6 @@ export const getSettings = async (): Promise<NsXSettings> => {
   const raw = res?.[NSX_SETTINGS_KEY]
   const base: NsXSettings = {
     loggedIn: false,
-    apiEndpoint: "http://localhost:9000",
-    defaultTableId: "",
     userEmail: undefined,
     userName: undefined,
     userAvatar: undefined,
@@ -26,9 +22,6 @@ export const getSettings = async (): Promise<NsXSettings> => {
   const r = raw as Partial<NsXSettings>
   return {
     loggedIn: typeof r.loggedIn === "boolean" ? r.loggedIn : base.loggedIn,
-    apiEndpoint: typeof r.apiEndpoint === "string" ? r.apiEndpoint : base.apiEndpoint,
-    defaultTableId:
-      typeof r.defaultTableId === "string" ? r.defaultTableId : base.defaultTableId,
     userEmail: typeof r.userEmail === "string" ? r.userEmail : base.userEmail,
     userName: typeof r.userName === "string" ? r.userName : base.userName,
     userAvatar: typeof r.userAvatar === "string" ? r.userAvatar : base.userAvatar,

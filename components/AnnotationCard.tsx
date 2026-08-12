@@ -16,7 +16,7 @@ type Props = {
   onClose: () => void
   onSave: (input: { title: string; note: string }) => Promise<void> | void
   taskOptions?: { tables: QTable[]; users: QTableUser[]; error?: string; loading: boolean }
-  onCreateTask: (input: { title: string; note: string; tableId: string; assigneeEmail?: string; dueDate?: string; includeContextUrl: boolean }) => Promise<void> | void
+  onCreateTask: (input: { title: string; note: string; tableId: string; assigneeEmail?: string; dueDate?: string }) => Promise<void> | void
 }
 
 const clamp = (v: number, min: number, max: number) =>
@@ -42,7 +42,6 @@ export function AnnotationCard({
   const [tableId, setTableId] = useState("")
   const [assigneeEmail, setAssigneeEmail] = useState("")
   const [dueDate, setDueDate] = useState("")
-  const [includeContextUrl, setIncludeContextUrl] = useState(true)
   const [taskError, setTaskError] = useState<string | null>(null)
 
   const excerpt = useMemo(() => {
@@ -55,7 +54,7 @@ export function AnnotationCard({
   const left = clamp(x, padding, window.innerWidth - cardWidth - padding)
   const top = clamp(y, padding, window.innerHeight - 540 - padding)
   const tables = taskOptions?.tables ?? []
-  const activeTableId = tableId || tables[0]?.id || ""
+  const activeTableId = tableId
 
   return (
     <div
@@ -115,7 +114,7 @@ export function AnnotationCard({
                   setTimeout(() => setIsSaving(false), 260)
                 })
             }}
-            placeholder="批注内容（必填，也将作为任务标题）"
+            placeholder="批注内容（必填，也可作为行动标题）"
             value={note}
           />
           <div className="mt-1.5 text-[11px] text-slate-400">
@@ -125,13 +124,16 @@ export function AnnotationCard({
 
         <div className="mt-3 grid grid-cols-2 gap-2">
           <label className="block text-xs font-medium text-slate-600">
-            目标数据表
+            目标行动表
             <select
               className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-2 py-2 text-sm outline-none focus:border-indigo-400"
               disabled={taskOptions?.loading || tables.length === 0}
               onChange={(e) => setTableId(e.target.value)}
               value={activeTableId}>
-              {tables.length ? tables.map((table) => <option key={table.id} value={table.id}>{table.name}（{table.row_count}）</option>) : <option value="">{taskOptions?.loading ? "加载 QTable…" : "暂无可用数据表"}</option>}
+              {tables.length ? <>
+                <option disabled value="">请选择目标表</option>
+                {tables.map((table) => <option key={table.id} value={table.id}>{table.name}（{table.row_count}）</option>)}
+              </> : <option value="">{taskOptions?.loading ? "加载行动选项…" : "暂无可用行动表"}</option>}
             </select>
           </label>
           <label className="block text-xs font-medium text-slate-600">
@@ -151,21 +153,13 @@ export function AnnotationCard({
             截止日期
             <input className="mt-1 w-full rounded-lg border border-slate-200 px-2 py-2 text-sm outline-none focus:border-indigo-400" onChange={(e) => setDueDate(e.target.value)} type="date" value={dueDate} />
           </label>
-          <div className="flex items-end">
-            <button
-              aria-checked={includeContextUrl}
-              className={`flex h-10 w-full items-center justify-between rounded-lg border px-3 text-xs ${includeContextUrl ? "border-indigo-300 bg-indigo-50 text-indigo-700" : "border-slate-200 bg-white text-slate-600"}`}
-              onClick={() => setIncludeContextUrl((value) => !value)}
-              role="switch"
-              type="button">
-              <span>附网页链接</span>
-              <span className={`relative h-5 w-9 rounded-full transition-colors ${includeContextUrl ? "bg-indigo-600" : "bg-slate-300"}`}><span className="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform" style={{ transform: includeContextUrl ? "translateX(16px)" : "translateX(0)" }} /></span>
-            </button>
+          <div className="flex items-end rounded-lg border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs text-indigo-700">
+            已自动附上来源链接
           </div>
         </div>
         {taskOptions?.error ? <div className="mt-2 text-xs text-rose-600">{taskOptions.error}</div> : null}
         {taskError ? <div className="mt-2 text-xs text-rose-600">{taskError}</div> : null}
-        {hasScreenshot ? <div className="mt-2 text-xs text-slate-500">已附上当前绘制区域截图，创建任务后会保存到 QTable 附件。</div> : null}
+        {hasScreenshot ? <div className="mt-2 text-xs text-slate-500">已附上当前绘制区域截图，QNote 会保存截图并在行动中保留来源引用。</div> : null}
 
         <div className="mt-3.5 grid grid-cols-2 gap-2.5">
           <button
@@ -191,16 +185,16 @@ export function AnnotationCard({
               setIsCreating(true)
               try {
                 setTaskError(null)
-                await onCreateTask({ title: note.trim(), note: note.trim(), tableId: activeTableId, assigneeEmail: assigneeEmail.trim() || undefined, dueDate: dueDate || undefined, includeContextUrl })
+                await onCreateTask({ title: note.trim(), note: note.trim(), tableId: activeTableId, assigneeEmail: assigneeEmail.trim() || undefined, dueDate: dueDate || undefined })
                 onClose()
               } catch (error) {
-                setTaskError(error instanceof Error ? error.message : "创建任务失败")
+                setTaskError(error instanceof Error ? error.message : "创建行动失败")
               } finally {
                 setIsCreating(false)
               }
             }}
             type="button">
-            {isCreating ? "创建中…" : "保存并创建任务"}
+            {isCreating ? "创建中…" : "保存并创建行动"}
           </button>
         </div>
       </div>

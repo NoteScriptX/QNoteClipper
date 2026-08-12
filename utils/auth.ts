@@ -1,36 +1,16 @@
-/**
- * OAuth 2.0 + PKCE Authentication Module for Chrome Extension
- * Implements secure authentication flow with QTable Web application
- */
+/** Authentication for the QNote-owned browser-clipper boundary. */
 
-// Configuration - Update these values for your QTable deployment
-export const QTABLE_API_BASE_URL =
-  process.env.PLASMO_PUBLIC_QTABLE_API_URL || "http://localhost:9000"
+export const QNOTE_API_BASE_URL =
+  process.env.PLASMO_PUBLIC_QNOTE_API_URL || "http://localhost:9001"
+
+// QTable is only opened after QNote has created a linked action.
 export const QTABLE_WEB_BASE_URL =
   process.env.PLASMO_PUBLIC_QTABLE_WEB_URL || "http://localhost:9100"
 
-const OAUTH_CONFIG = {
-  // QTable Web OAuth authorization endpoint
-  AUTHORIZATION_ENDPOINT: `${QTABLE_WEB_BASE_URL}/oauth/authorize`,
-  // QTable Web token endpoint
-  TOKEN_ENDPOINT: `${QTABLE_API_BASE_URL}/oauth/token`,
-  // User info endpoint (optional)
-  USER_INFO_ENDPOINT: `${QTABLE_API_BASE_URL}/oauth/me`,
-  // OAuth client ID registered in QTable
-  CLIENT_ID: "note-script-clipper",
-  // Requested scopes
-  SCOPE: "openid profile email",
-  // Set to true to use mock authentication for testing
-  USE_MOCK_AUTH: false
-}
-
-// Storage keys
 const STORAGE_KEYS = {
-  ACCESS_TOKEN: "oauth_access_token",
-  REFRESH_TOKEN: "oauth_refresh_token",
-  EXPIRES_AT: "oauth_expires_at",
-  PKCE_VERIFIER: "oauth_pkce_verifier",
-  USER_INFO: "oauth_user_info"
+  ACCESS_TOKEN: "qnote_access_token",
+  EXPIRES_AT: "qnote_expires_at",
+  USER_INFO: "qnote_user_info"
 } as const
 
 export type UserInfo = {
@@ -55,439 +35,114 @@ const decodeBase64Url = (input: string): string => {
 
 const parseJwtExpMs = (token: string): number | null => {
   try {
-    const parts = token.split(".")
-    if (parts.length < 2) return null
-    const payloadRaw = decodeBase64Url(parts[1])
-    const payload = JSON.parse(payloadRaw) as { exp?: unknown }
-    if (typeof payload.exp !== "number") return null
-    return payload.exp * 1000
+    const payload = JSON.parse(decodeBase64Url(token.split(".")[1])) as { exp?: unknown }
+    return typeof payload.exp === "number" ? payload.exp * 1000 : null
   } catch {
     return null
   }
 }
 
-/**
- * Generate a cryptographically random base64url-encoded string
- */
-function base64URLEncode(buffer: ArrayBuffer): string {
-  return btoa(String.fromCharCode(...new Uint8Array(buffer)))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "")
-}
-
-/**
- * Compute SHA-256 hash of input string
- */
-async function sha256(input: string): Promise<ArrayBuffer> {
-  const encoder = new TextEncoder()
-  const data = encoder.encode(input)
-  return await crypto.subtle.digest("SHA-256", data)
-}
-
-/**
- * Generate PKCE code verifier and challenge pair
- */
-export async function generatePKCEPair(): Promise<{
-  verifier: string
-  challenge: string
-}> {
-  const randomBytes = crypto.getRandomValues(new Uint8Array(32))
-  const verifier = base64URLEncode(randomBytes.buffer)
-  const challengeBuffer = await sha256(verifier)
-  const challenge = base64URLEncode(challengeBuffer)
-  return { verifier, challenge }
-}
-
-/**
- * Build the OAuth authorization URL with PKCE parameters
- */
-export async function buildAuthorizationUrl(): Promise<{ url: string; verifier: string }> {
-  const { verifier, challenge } = await generatePKCEPair()
-  
-  // Store verifier temporarily in session storage (not persistent)
-  chrome.storage.session.set({ [STORAGE_KEYS.PKCE_VERIFIER]: verifier })
-
-  const redirectUri = `https://${chrome.runtime.id}.chromiumapp.org/`
-  
-  const params = new URLSearchParams({
-    response_type: "code",
-    client_id: OAUTH_CONFIG.CLIENT_ID,
-    redirect_uri: redirectUri,
-    code_challenge: challenge,
-    code_challenge_method: "S256",
-    scope: OAUTH_CONFIG.SCOPE
-  })
-
-  const url = `${OAUTH_CONFIG.AUTHORIZATION_ENDPOINT}?${params.toString()}`
-  return { url, verifier }
-}
-
-/**
- * Mock login for testing without OAuth backend
- */
-async function mockLogin(): Promise<void> {
-  console.log("Performing mock login...")
-  
-  // Simulate API delay
-  await new Promise(resolve => setTimeout(resolve, 500))
-  
-  // Mock tokens
-  const mockTokens = {
-    access_token: "mock_access_token_" + Date.now(),
-    refresh_token: "mock_refresh_token_" + Date.now(),
-    expires_in: 3600 // 1 hour
-  }
-  
-  // Store tokens
-  await storeTokens(mockTokens)
-  
-  // Mock user info
-  const mockUserInfo: UserInfo = {
-    id: "mock_user_001",
-    name: "测试用户",
-    email: "test@example.com",
-    avatar_url: "https://ui-avatars.com/api/?name=测试用户&background=random"
-  }
-  
-  // Store user info
+const storeTokens = async (accessToken: string): Promise<void> => {
   await chrome.storage.local.set({
-    [STORAGE_KEYS.USER_INFO]: mockUserInfo
+    [STORAGE_KEYS.ACCESS_TOKEN]: accessToken,
+    [STORAGE_KEYS.EXPIRES_AT]: parseJwtExpMs(accessToken) ?? Date.now() + 3_600_000
   })
-  
-  console.log("Mock login successful", mockUserInfo)
 }
 
-/**
- * Launch the OAuth authorization flow using Chrome Identity API
- */
-export async function startLoginFlow(): Promise<void> {
-  // Use mock authentication for testing
-  if (OAUTH_CONFIG.USE_MOCK_AUTH) {
-    console.log("Using mock authentication")
-    await mockLogin()
-    return
-  }
-
-  const { url } = await buildAuthorizationUrl()
-
+const fetchUserInfo = async (accessToken: string): Promise<UserInfo | null> => {
   try {
-    const responseUrl = await chrome.identity.launchWebAuthFlow({
-      url,
-      interactive: true
+    const response = await fetch(`${QNOTE_API_BASE_URL}/auth/me`, {
+      headers: { Authorization: `Bearer ${accessToken}` }
     })
-
-    if (!responseUrl) {
-      throw new Error("No response from authorization server")
+    if (!response.ok) return null
+    const payload = await response.json() as {
+      id: number | string
+      name: string
+      email: string
     }
-
-    await handleCallback(responseUrl)
-  } catch (error) {
-    console.error("OAuth login failed:", error)
-    throw error
+    const user: UserInfo = {
+      id: String(payload.id),
+      name: payload.name,
+      email: payload.email
+    }
+    await chrome.storage.local.set({ [STORAGE_KEYS.USER_INFO]: user })
+    return user
+  } catch {
+    return null
   }
 }
 
 export async function loginWithPassword(email: string, password: string): Promise<void> {
-  const response = await fetch(`${QTABLE_API_BASE_URL}/auth/login`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password })
-  })
-  const data = await response.json().catch(() => ({}))
-  if (!response.ok || !data.access_token) throw new Error(data.detail || "账号或密码错误")
-  await storeTokens({ access_token: data.access_token, expires_in: 3600 })
-  await fetchUserInfo(data.access_token)
-}
-
-/**
- * Handle the OAuth callback and exchange code for tokens
- */
-async function handleCallback(callbackUrl: string): Promise<void> {
-  const url = new URL(callbackUrl)
-  const code = url.searchParams.get("code")
-  const error = url.searchParams.get("error")
-
-  if (error) {
-    const errorDescription = url.searchParams.get("error_description") || error
-    throw new Error(`Authorization failed: ${errorDescription}`)
-  }
-
-  if (!code) {
-    throw new Error("No authorization code received")
-  }
-
-  // Retrieve PKCE verifier from session storage
-  const sessionData = await chrome.storage.session.get(STORAGE_KEYS.PKCE_VERIFIER)
-  const verifier = sessionData[STORAGE_KEYS.PKCE_VERIFIER] as string | undefined
-
-  if (!verifier) {
-    throw new Error("PKCE verifier not found. Please try logging in again.")
-  }
-
-  // Clean up verifier from session storage
-  await chrome.storage.session.remove(STORAGE_KEYS.PKCE_VERIFIER)
-
-  // Exchange authorization code for tokens
-  const redirectUri = `https://${chrome.runtime.id}.chromiumapp.org/`
-  
-  const tokenResponse = await fetch(OAUTH_CONFIG.TOKEN_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      grant_type: "authorization_code",
-      client_id: OAUTH_CONFIG.CLIENT_ID,
-      code,
-      redirect_uri: redirectUri,
-      code_verifier: verifier
-    })
-  })
-
-  if (!tokenResponse.ok) {
-    const errorData = await tokenResponse.json().catch(() => ({}))
-    throw new Error(errorData.error_description || "Token exchange failed")
-  }
-
-  const tokens = await tokenResponse.json()
-
-  if (!tokens.access_token) {
-    throw new Error("No access token received")
-  }
-
-  // Store tokens securely
-  await storeTokens(tokens)
-
-  // Fetch user information
-  await fetchUserInfo(tokens.access_token)
-}
-
-/**
- * Store OAuth tokens in chrome.storage.local
- */
-async function storeTokens(tokens: {
-  access_token: string
-  refresh_token?: string
-  expires_in?: number
-}): Promise<void> {
-  const expiresAt =
-    typeof tokens.expires_in === "number"
-      ? Date.now() + tokens.expires_in * 1000
-      : parseJwtExpMs(tokens.access_token) ?? Date.now() + 3600 * 1000
-
-  const storageData: Record<string, any> = {
-    [STORAGE_KEYS.ACCESS_TOKEN]: tokens.access_token,
-    [STORAGE_KEYS.EXPIRES_AT]: expiresAt
-  }
-
-  if (tokens.refresh_token) {
-    storageData[STORAGE_KEYS.REFRESH_TOKEN] = tokens.refresh_token
-  }
-
-  await chrome.storage.local.set(storageData)
-}
-
-/**
- * Fetch user information from the API
- */
-async function fetchUserInfo(accessToken: string): Promise<UserInfo | null> {
+  let response: Response
   try {
-    const response = await fetch(OAUTH_CONFIG.USER_INFO_ENDPOINT, {
-      headers: {
-        Authorization: `Bearer ${accessToken}`
-      }
+    response = await fetch(`${QNOTE_API_BASE_URL}/api/clipper/session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password })
     })
-
-    if (!response.ok) {
-      console.warn("Failed to fetch user info")
-      return null
-    }
-
-    const userInfo = await response.json()
-    
-    // Store user info
-    await chrome.storage.local.set({
-      [STORAGE_KEYS.USER_INFO]: userInfo
-    })
-
-    return userInfo
-  } catch (error) {
-    console.error("Error fetching user info:", error)
-    return null
+  } catch {
+    throw new Error(
+      `无法连接 QNoteServer（${QNOTE_API_BASE_URL}）。请先启动 QNoteServer，并确认插件配置的 PLASMO_PUBLIC_QNOTE_API_URL。`
+    )
+  }
+  const payload = await response.json().catch(() => ({})) as {
+    access_token?: string
+    detail?: string
+  }
+  if (!response.ok || !payload.access_token) {
+    throw new Error(payload.detail || "账号或密码错误")
+  }
+  await storeTokens(payload.access_token)
+  const user = await fetchUserInfo(payload.access_token)
+  if (!user) {
+    await clearAuth()
+    throw new Error(
+      "QNoteServer 无法验证登录会话。请确认它与 QTable 使用相同的 SECRET_KEY。"
+    )
   }
 }
 
-/**
- * Get the current access token, refreshing if necessary
- */
 export async function getValidAccessToken(): Promise<string | null> {
   const storage = await chrome.storage.local.get([
     STORAGE_KEYS.ACCESS_TOKEN,
-    STORAGE_KEYS.REFRESH_TOKEN,
     STORAGE_KEYS.EXPIRES_AT
   ])
-
-  const accessToken = storage[STORAGE_KEYS.ACCESS_TOKEN] as string | undefined
-  const refreshToken = storage[STORAGE_KEYS.REFRESH_TOKEN] as string | undefined
+  const token = storage[STORAGE_KEYS.ACCESS_TOKEN] as string | undefined
   const expiresAt = storage[STORAGE_KEYS.EXPIRES_AT] as number | undefined
-
-  if (!accessToken || !expiresAt) {
+  if (!token || !expiresAt || Date.now() >= expiresAt) {
+    await clearAuth()
     return null
   }
-
-  // Check if token is expired or expiring soon (within 1 minute)
-  if (Date.now() > expiresAt - 60000) {
-    if (!refreshToken) {
-      // No refresh token available, need to re-authenticate
-      await clearAuth()
-      return null
-    }
-
-    // Try to refresh the token
-    try {
-      const newTokens = await refreshAccessToken(refreshToken)
-      return newTokens.access_token
-    } catch (error) {
-      console.error("Token refresh failed:", error)
-      await clearAuth()
-      return null
-    }
-  }
-
-  return accessToken
+  return token
 }
 
-/**
- * Refresh the access token using the refresh token
- */
-async function refreshAccessToken(refreshToken: string): Promise<{
-  access_token: string
-  refresh_token?: string
-  expires_in?: number
-}> {
-  const response = await fetch(OAUTH_CONFIG.TOKEN_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      grant_type: "refresh_token",
-      client_id: OAUTH_CONFIG.CLIENT_ID,
-      refresh_token: refreshToken
-    })
-  })
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}))
-    throw new Error(errorData.error_description || "Token refresh failed")
-  }
-
-  const tokens = await response.json()
-
-  if (!tokens.access_token) {
-    throw new Error("No access token received during refresh")
-  }
-
-  // Store new tokens
-  await storeTokens(tokens)
-
-  return tokens
-}
-
-/**
- * Clear all authentication data
- */
 export async function clearAuth(): Promise<void> {
   await chrome.storage.local.remove([
     STORAGE_KEYS.ACCESS_TOKEN,
-    STORAGE_KEYS.REFRESH_TOKEN,
     STORAGE_KEYS.EXPIRES_AT,
     STORAGE_KEYS.USER_INFO
   ])
 }
 
-/**
- * Get current authentication state
- */
 export async function getAuthState(): Promise<AuthState> {
   const storage = await chrome.storage.local.get([
     STORAGE_KEYS.ACCESS_TOKEN,
     STORAGE_KEYS.EXPIRES_AT,
     STORAGE_KEYS.USER_INFO
   ])
-
-  const accessToken = storage[STORAGE_KEYS.ACCESS_TOKEN] as string | undefined
+  const token = storage[STORAGE_KEYS.ACCESS_TOKEN] as string | undefined
   const expiresAt = storage[STORAGE_KEYS.EXPIRES_AT] as number | undefined
-  const userInfo = storage[STORAGE_KEYS.USER_INFO] as UserInfo | undefined
-
-  const isAuthenticated = !!(accessToken && expiresAt && Date.now() < expiresAt)
-
+  const isAuthenticated = Boolean(token && expiresAt && Date.now() < expiresAt)
   return {
     isAuthenticated,
     isLoading: false,
-    user: userInfo || null,
+    user: isAuthenticated
+      ? (storage[STORAGE_KEYS.USER_INFO] as UserInfo | undefined) || null
+      : null,
     error: null
   }
 }
 
-export async function loginWithEmailPassword(input: {
-  baseUrl: string
-  email: string
-  password: string
-}): Promise<void> {
-  const baseUrl = input.baseUrl.replace(/\/+$/, "")
-  const response = await fetch(`${baseUrl}/auth/login`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      email: input.email,
-      password: input.password
-    })
-  })
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => "")
-    let message = `登录失败（${response.status}）`
-    try {
-      const parsed = JSON.parse(text) as any
-      message =
-        typeof parsed?.message === "string"
-          ? parsed.message
-          : typeof parsed?.detail === "string"
-            ? parsed.detail
-            : message
-    } catch {
-      if (text.trim()) message = text
-    }
-    throw new Error(message)
-  }
-
-  const data = (await response.json().catch(() => null)) as
-    | { access_token?: unknown; token_type?: unknown }
-    | null
-
-  const accessToken = typeof data?.access_token === "string" ? data.access_token : ""
-  if (!accessToken) throw new Error("登录失败：未返回 access_token")
-
-  await storeTokens({ access_token: accessToken })
-
-  const userInfo: UserInfo = {
-    id: input.email,
-    name: input.email,
-    email: input.email
-  }
-
-  await chrome.storage.local.set({
-    [STORAGE_KEYS.USER_INFO]: userInfo
-  })
-}
-
-/**
- * Logout user and clear all auth data
- */
 export async function logout(): Promise<void> {
   await clearAuth()
 }

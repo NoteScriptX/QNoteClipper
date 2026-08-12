@@ -33,7 +33,7 @@ type Props = {
 
 const excerpt = (text: string) => {
   const t = text.trim()
-  if (!t) return "（空白任务）"
+  if (!t) return "（空白行动）"
   return t.length > 60 ? `${t.slice(0, 60)}…` : t
 }
 
@@ -64,10 +64,10 @@ export function AnnotationList({ items, onCreateTask, onStatusChange }: Props) {
       <div className="flex min-h-48 flex-col items-center justify-center rounded border border-dashed border-slate-200 bg-white p-6 text-center">
         <div className="text-3xl">🗒️</div>
         <div className="mt-3 text-sm font-semibold text-slate-900">
-          选中网页文字，即刻批注并派活
+          选中网页文字，即刻捕获并创建行动
         </div>
         <div className="mt-1 text-sm text-slate-500">
-          松开鼠标后点击浮标，写下批注或直接创建任务。
+          松开鼠标后点击浮标，写下批注；需要时再创建可追踪行动。
         </div>
       </div>
     )
@@ -95,7 +95,7 @@ function AnnotationListItem({
   const statusValue = it.task.kind === "created" ? it.task.statusValue : undefined
   const statusOption = it.task.kind === "created" ? it.task.statusOptions?.find((option) => option.id === statusValue || option.label === statusValue) : undefined
   const selectedStatusId = it.task.kind === "created" ? (statusOption?.id || it.task.statusOptions?.[0]?.id) : undefined
-  const statusLabel = statusOption?.label || statusValue || (it.task.kind === "created" ? "待处理" : "待派活")
+  const statusLabel = statusOption?.label || statusValue || (it.task.kind === "created" ? "待处理" : "待创建")
   const isDone = /完成|done|closed|关闭/i.test(statusLabel)
   const status = it.task.kind === "created"
     ? { line: isDone ? "bg-emerald-500" : "bg-indigo-500", pillClass: isDone ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-indigo-50 text-indigo-700 border-indigo-200" }
@@ -129,7 +129,7 @@ function AnnotationListItem({
               className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${status.pillClass}`}>
               {it.task.kind === "created" && it.task.statusOptions?.length && onStatusChange ? (
                 <select
-                  aria-label="任务状态"
+                  aria-label="行动状态"
                   className={`rounded-full border px-2 py-0.5 text-xs outline-none ${status.pillClass}`}
                   onChange={(e) => {
                     e.stopPropagation()
@@ -169,11 +169,11 @@ function AnnotationListItem({
                     onClick={(e) => e.stopPropagation()}
                     rel="noreferrer"
                     target="_blank">
-                    在 QTable 中查看
+                    在行动表中查看
                   </a>
                 ) : (
                   <span className="shrink-0 text-xs text-slate-500">
-                    已派活
+                    已创建行动
                   </span>
                 )
               ) : (
@@ -184,7 +184,7 @@ function AnnotationListItem({
                     onCreateTask?.(it.id)
                   }}
                   type="button">
-                  派活
+                  创建行动
                 </button>
               )}
             </div>

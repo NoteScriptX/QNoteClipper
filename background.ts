@@ -13,7 +13,7 @@ import {
 import { getAllAnnotations, markAnnotationSyncError, NSX_ANNOTATIONS_KEY, type NsXAnnotation } from "~utils/storage"
 import { getAuthState, loginWithPassword, logout as authLogout, getValidAccessToken } from "~utils/auth"
 import { patchSettings } from "~utils/settings"
-import { createTaskFromAnnotation, getQtableUsers, getQtables, hydrateAnnotationsFromQNote, syncAnnotationToQNote } from "~utils/api"
+import { createTaskFromAnnotation, getActionOptions, hydrateAnnotationsFromQNote, syncAnnotationToQNote } from "~utils/api"
 
 const syncInFlight = new Set<string>()
 
@@ -176,9 +176,9 @@ chrome.runtime.onMessage.addListener(
     if (message.type === CLIPPER_GET_TASK_OPTIONS) {
       ;(async () => {
         try {
-          sendResponse({ ok: true, tables: await getQtables(), users: await getQtableUsers() })
+          sendResponse({ ok: true, ...(await getActionOptions()) })
         } catch (error) {
-          sendResponse({ ok: false, error: error instanceof Error ? error.message : "加载 QTable 数据失败" })
+          sendResponse({ ok: false, error: error instanceof Error ? error.message : "加载行动选项失败" })
         }
       })()
       return true
@@ -190,11 +190,17 @@ chrome.runtime.onMessage.addListener(
           const p = message.payload
           const task = await createTaskFromAnnotation({
             annotationId: p.annotationId,
-            task: { title: p.title, note: p.note, selected_text: p.selectedText, page_url: p.pageUrl, page_title: p.pageTitle, mode: p.mode, target_table_id: p.tableId, assignee_email: p.assigneeEmail, due_date: p.dueDate, include_context_url: p.includeContextUrl, screenshot_data_url: p.screenshotDataUrl }
+            task: {
+              title: p.title,
+              note: p.note,
+              target_table_id: p.tableId,
+              assignee_email: p.assigneeEmail,
+              due_date: p.dueDate
+            }
           })
           sendResponse({ ok: true, task })
         } catch (error) {
-          sendResponse({ ok: false, error: error instanceof Error ? error.message : "创建任务失败" })
+          sendResponse({ ok: false, error: error instanceof Error ? error.message : "创建行动失败" })
         }
       })()
       return true
@@ -204,7 +210,7 @@ chrome.runtime.onMessage.addListener(
     if (message.type === OAUTH_START_LOGIN) {
       ;(async () => {
         try {
-          if (!message.email || !message.password) throw new Error("请输入 QTable 账号和密码")
+          if (!message.email || !message.password) throw new Error("请输入 QNote 邮箱和密码")
           await loginWithPassword(message.email, message.password)
           // After successful login, update settings with user info
           const authState = await getAuthState()
@@ -221,7 +227,7 @@ chrome.runtime.onMessage.addListener(
           chrome.runtime.sendMessage({ type: "AUTH_STATE_CHANGED" })
           sendResponse({ ok: true })
         } catch (error) {
-          console.error("OAuth login failed:", error)
+          console.error("QNote login failed:", error)
           const errorMessage = error instanceof Error ? error.message : "登录失败"
           chrome.runtime.sendMessage({
             type: "AUTH_ERROR",

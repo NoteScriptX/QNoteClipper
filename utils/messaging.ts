@@ -49,7 +49,6 @@ export type ClipperCreateTaskMessage = {
     tableId: string
     assigneeEmail?: string
     dueDate?: string
-    includeContextUrl: boolean
     screenshotDataUrl?: string
   }
 }

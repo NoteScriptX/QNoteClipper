@@ -8,7 +8,7 @@ import { AnnotationCard } from "~components/AnnotationCard";
 import { Bubble } from "~components/Bubble";
 import { createFingerprintFromRange, createFingerprintFromSelection, getMergedClientRects, locateRangeFromFingerprint } from "~utils/anchor";
 import { CLIPPER_CAPTURE_ANNOTATION_IMAGE, CLIPPER_CREATE_TASK, CLIPPER_GET_TASK_OPTIONS, CONTENT_ACTIVATE_DRAW_MODE, CONTENT_OPEN_SELECTION_CARD, requestFromBackground, STORAGE_UPDATED } from "~utils/messaging";
-import { getAnnotationsByUrl, normalizePageUrl, NSX_ANNOTATIONS_KEY, updateAnnotationById, upsertAnnotation, type AnnotationMode, type NsXAnnotation } from "~utils/storage";
+import { getAnnotationsByUrl, normalizePageUrl, NSX_ANNOTATIONS_KEY, upsertAnnotation, type AnnotationMode, type NsXAnnotation } from "~utils/storage";
 import type { QTable, QTableUser } from "~utils/api";
 
 
@@ -322,8 +322,8 @@ export default function Content() {
     if (!card.visible) return
     setTaskOptions((previous) => ({ ...previous, loading: true, error: undefined }))
     requestFromBackground<{ ok: boolean; tables?: QTable[]; users?: QTableUser[]; error?: string }>({ type: CLIPPER_GET_TASK_OPTIONS })
-      .then((response) => setTaskOptions(response.ok ? { tables: response.tables ?? [], users: response.users ?? [], loading: false } : { tables: [], users: [], loading: false, error: response.error || "请先登录 QTable" }))
-      .catch(() => setTaskOptions({ tables: [], users: [], loading: false, error: "无法连接 QTable" }))
+      .then((response) => setTaskOptions(response.ok ? { tables: response.tables ?? [], users: response.users ?? [], loading: false } : { tables: [], users: [], loading: false, error: response.error || "请先登录 QNote" }))
+      .catch(() => setTaskOptions({ tables: [], users: [], loading: false, error: "无法连接 QNote" }))
   }, [card.visible])
 
   useEffect(() => {
@@ -661,7 +661,7 @@ export default function Content() {
           onCreateTask={async (input) => {
             const draft = card.draft
             await saveDraft(draft, input)
-            const response = await requestFromBackground<{ ok: boolean; task?: { task_id: string; qtable_url: string; target_table_id?: string; status?: { field_id: string; field_name: string; field_type: string; options: { id: string; label: string }[]; value?: string } }; error?: string }>({
+            const response = await requestFromBackground<{ ok: boolean; task?: { task_id: string; qtable_url: string; target_table_id?: string }; error?: string }>({
               type: CLIPPER_CREATE_TASK,
               payload: {
                 annotationId: draft.id,
@@ -674,25 +674,10 @@ export default function Content() {
                 tableId: input.tableId,
                 assigneeEmail: input.assigneeEmail,
                 dueDate: input.dueDate,
-                includeContextUrl: input.includeContextUrl,
                 screenshotDataUrl: draft.screenshotDataUrl
               }
             })
-            if (!response.ok || !response.task) throw new Error(response.error || "创建任务失败")
-            await updateAnnotationById(draft.id, (annotation) => ({
-              ...annotation,
-              task: {
-                status: "created",
-                taskId: response.task!.task_id,
-                qtableUrl: response.task!.qtable_url,
-                tableId: response.task!.target_table_id || input.tableId,
-                statusFieldId: response.task!.status?.field_id,
-                statusFieldName: response.task!.status?.field_name,
-                statusFieldType: response.task!.status?.field_type,
-                statusValue: response.task!.status?.value,
-                statusOptions: response.task!.status?.options
-              }
-            }))
+            if (!response.ok || !response.task) throw new Error(response.error || "创建行动失败")
           }}
           onSave={async (input) => {
             const draft = card.draft

@@ -11,7 +11,7 @@ import "~style.css";
 
 import { AnnotationList, type AnnotationPreview } from "~components/AnnotationList";
 import { TaskForm } from "~components/TaskForm";
-import { createTaskFromAnnotation, getQtables, getQtableUsers, getTaskStatus, hydrateAnnotationsFromQNote, updateTaskStatus, type QTable, type QTableUser } from "~utils/api";
+import { createTaskFromAnnotation, getActionOptions, getTaskStatus, hydrateAnnotationsFromQNote, updateTaskStatus, type QTable, type QTableUser } from "~utils/api";
 import { CONTENT_OPEN_SIDEPANEL_WITH_ANNOTATION, STORAGE_UPDATED, type BackgroundBroadcastMessage, type OpenSidePanelPayload } from "~utils/messaging";
 import { getSettings, patchSettings, type NsXSettings } from "~utils/settings";
 import { getAllAnnotations, getAnnotationById, normalizePageUrl, NSX_ANNOTATIONS_KEY, updateAnnotationById } from "~utils/storage";
@@ -101,16 +101,17 @@ export default function SidePanel() {
 
       const st = await getSettings()
       if (!authState.isAuthenticated) {
-        setSettings({ ...st, loggedIn: false, defaultTableId: "" })
+        setSettings({ ...st, loggedIn: false })
         setQtables([])
         setItems([])
         setActiveTab("settings")
         return
       }
 
-      const qts = await getQtables()
+      const actionOptions = await getActionOptions()
+      const qts = actionOptions.tables
       setQtables(qts)
-      setQtableUsers(await getQtableUsers())
+      setQtableUsers(actionOptions.users)
 
       // Pull the authoritative server copy before rendering. QNote outages do
       // not block access to the extension's offline cache.
@@ -124,9 +125,7 @@ export default function SidePanel() {
         // automatically when the service is reachable again.
       }
 
-      const validDefaultTableId = qts.some((table) => table.id === st.defaultTableId) ? st.defaultTableId : ""
-      if (validDefaultTableId !== st.defaultTableId) await patchSettings({ defaultTableId: validDefaultTableId })
-      setSettings({ ...st, loggedIn: true, defaultTableId: validDefaultTableId, userEmail: authState.user?.email ?? st.userEmail, userName: authState.user?.name ?? st.userName, userAvatar: authState.user?.avatar_url ?? st.userAvatar })
+      setSettings({ ...st, loggedIn: true, userEmail: authState.user?.email ?? st.userEmail, userName: authState.user?.name ?? st.userName, userAvatar: authState.user?.avatar_url ?? st.userAvatar })
 
       const allAnnotations = await getAllAnnotations()
       const choices = new Map<string, PageChoice>()
@@ -199,11 +198,11 @@ export default function SidePanel() {
       setItems(hydratedItems)
     } catch (err) {
       if (err instanceof Error && err.message.includes("Not authenticated")) {
-        setError("登录已过期，请重新登录")
+        setError("登录已过期，请重新登录 QNote")
         await patchSettings({ loggedIn: false })
         setSettings(await getSettings())
       } else {
-        setError("加载失败，请重试")
+        setError(err instanceof Error ? err.message : "加载失败，请重试")
       }
     } finally {
       setIsRefreshing(false)
@@ -213,7 +212,7 @@ export default function SidePanel() {
   const handleLogin = async () => {
     const email = loginEmail.trim()
     if (!email || !loginPassword) {
-      setError("请输入 QTable 邮箱和密码")
+      setError("请输入 QNote 邮箱和密码")
       return
     }
     setIsLoggingIn(true)
@@ -222,7 +221,7 @@ export default function SidePanel() {
       const response = await chrome.runtime.sendMessage({ type: "OAUTH_START_LOGIN", email, password: loginPassword })
       if (!response?.ok) throw new Error(response?.error || "登录失败")
       setLoginPassword("")
-      setSuccess("登录成功，正在加载你的数据表…")
+      setSuccess("登录成功，正在加载你的行动空间…")
       await refresh()
       setActiveTab("annotations")
     } catch (err) {
@@ -235,7 +234,7 @@ export default function SidePanel() {
   const handleStatusChange = async (annotationId: string, value: string) => {
     const item = items.find((candidate) => candidate.id === annotationId)
     if (!item || item.task.kind !== "created" || !item.task.tableId) {
-      setError("这条任务缺少 QTable 表格信息，请重新创建任务")
+      setError("这条行动缺少目标表信息，请重新创建")
       return
     }
     try {
@@ -268,9 +267,9 @@ export default function SidePanel() {
           statusOptions: result.status.options
         } : candidate.task
       } : candidate))
-      setSuccess(`任务状态已更新为 ${result.status.options.find((option) => option.id === result.status.value)?.label || result.status.value}`)
+      setSuccess(`行动状态已更新为 ${result.status.options.find((option) => option.id === result.status.value)?.label || result.status.value}`)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "更新任务状态失败")
+      setError(err instanceof Error ? err.message : "更新行动状态失败")
     }
   }
 
@@ -376,7 +375,7 @@ export default function SidePanel() {
             <div className="flex h-7 w-7 items-center justify-center rounded bg-indigo-600 text-white">
               ✂︎
             </div>
-            <div className="text-sm font-semibold">Clipper</div>
+            <div className="text-sm font-semibold">QNote Clipper</div>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -440,7 +439,7 @@ export default function SidePanel() {
           type="button">
           <div className="flex items-center gap-2">
             {!isLoggedIn ? (
-              <div className="text-sm font-semibold">登录 QTable 后开始批注</div>
+              <div className="text-sm font-semibold">登录 QNote 后开始捕获</div>
             ) : (
               <>
                 {pageInfo.faviconUrl ? (
@@ -468,7 +467,7 @@ export default function SidePanel() {
           </div>
           {!isLoggedIn ? (
             <div className="mt-1 text-xs text-amber-800">
-              未登录：暂不加载数据表，也不能创建任务
+              未登录：暂不能同步批注或创建行动
             </div>
           ) : null}
         </button>
@@ -508,7 +507,7 @@ export default function SidePanel() {
             {pending ? (
               <div className="mb-3 rounded border border-slate-200 bg-white p-3">
                 <div className="text-xs font-medium text-slate-500">
-                  待创建任务的批注
+                  待创建行动的批注
                 </div>
                 <div className="mt-1 line-clamp-2 text-sm text-slate-900">
                   {pending.selectedText}
@@ -564,44 +563,6 @@ export default function SidePanel() {
               设置与账户
             </div>
             <div className="mt-3 space-y-3">
-              <div>
-                <div className="text-xs font-medium text-slate-500">
-                  API 端点
-                </div>
-                <input
-                  className="mt-1 w-full rounded border border-slate-200 px-2 py-1 text-sm outline-none focus:border-slate-400"
-                  onChange={async (e) => {
-                    const next = await patchSettings({
-                      apiEndpoint: e.target.value
-                    })
-                    setSettings(next)
-                  }}
-                  placeholder="http://localhost:8000"
-                  value={settings?.apiEndpoint ?? ""}
-                />
-              </div>
-              <div>
-                <div className="text-xs font-medium text-slate-500">
-                  默认目标数据表
-                </div>
-                <select
-                  className="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 text-sm outline-none focus:border-slate-400 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-                  disabled={!isLoggedIn || qtables.length === 0}
-                  onChange={async (e) => {
-                    const next = await patchSettings({
-                      defaultTableId: e.target.value
-                    })
-                    setSettings(next)
-                  }}
-                  value={settings?.defaultTableId ?? ""}>
-                  <option value="">请选择默认数据表</option>
-                  {qtables.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {(t.emoji ? `${t.emoji} ` : "") + t.name} ({t.row_count})
-                    </option>
-                  ))}
-                </select>
-              </div>
               <div className="flex items-center justify-between">
                 <div>
                   <div className="text-xs font-medium text-slate-500">
@@ -638,7 +599,6 @@ export default function SidePanel() {
                         await chrome.runtime.sendMessage({ type: "OAUTH_LOGOUT" })
                         await patchSettings({
                           loggedIn: false,
-                          defaultTableId: "",
                           userEmail: undefined,
                           userName: undefined,
                           userAvatar: undefined
@@ -657,15 +617,15 @@ export default function SidePanel() {
             </div>
             {!isLoggedIn ? (
               <div className="mt-4 border-t border-slate-100 pt-4">
-                <div className="mb-2 text-sm font-semibold text-slate-900">登录 QTable</div>
+                <div className="mb-2 text-sm font-semibold text-slate-900">登录 QNote</div>
                 <div className="space-y-2">
-                  <input className="w-full rounded border border-slate-200 px-3 py-2 text-sm outline-none focus:border-indigo-400" autoComplete="username" onChange={(e) => setLoginEmail(e.target.value)} placeholder="QTable 邮箱" type="email" value={loginEmail} />
+                  <input className="w-full rounded border border-slate-200 px-3 py-2 text-sm outline-none focus:border-indigo-400" autoComplete="username" onChange={(e) => setLoginEmail(e.target.value)} placeholder="QNote 邮箱" type="email" value={loginEmail} />
                   <input className="w-full rounded border border-slate-200 px-3 py-2 text-sm outline-none focus:border-indigo-400" autoComplete="current-password" onChange={(e) => setLoginPassword(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") void handleLogin() }} placeholder="密码" type="password" value={loginPassword} />
                   <button className="w-full rounded bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-500 active:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60" disabled={isLoggingIn} onClick={() => void handleLogin()} type="button">
                     {isLoggingIn ? "登录中…" : "登录"}
                   </button>
                 </div>
-                <div className="mt-2 text-xs text-slate-500">账号密码只用于登录本地 QTable 服务，不会打开浏览器弹窗。</div>
+                <div className="mt-2 text-xs text-slate-500">账号密码仅提交给 QNote 会话服务；插件不会直接连接 QTable。</div>
               </div>
             ) : null}
           </div>
@@ -674,47 +634,25 @@ export default function SidePanel() {
 
       {pending && isLoggedIn ? (
         <TaskForm
-          defaultTableId={settings?.defaultTableId}
           onOpenChange={(open) => {
             setTaskDialogOpen(open)
             if (!open) setPending(null)
           }}
           onSubmit={async (form) => {
             const ann = await getAnnotationById(pending.annotationId)
-            const note = ann?.note ?? ""
-            const res = await createTaskFromAnnotation({
+            await createTaskFromAnnotation({
               annotationId: pending.annotationId,
               task: {
                 title: form.title,
                 assignee_email: form.assignee,
                 due_date: form.dueDate,
                 target_table_id: form.tableId,
-                include_context_url: form.includeContextUrl,
-                note: ann?.note ?? "",
-                selected_text: ann?.selectedText ?? pending.selectedText,
-                page_url: ann?.url ?? pending.url,
-                page_title: ann?.pageTitle ?? "",
-                mode: ann?.mode ?? pending.mode
+                note: ann?.note ?? ""
               }
             })
-            await updateAnnotationById(pending.annotationId, (a) => ({
-              ...a,
-              note: a.note ?? note,
-              task: {
-                status: "created",
-                taskId: res.task_id,
-                qtableUrl: res.qtable_url,
-                tableId: res.target_table_id || form.tableId,
-                statusFieldId: res.status?.field_id,
-                statusFieldName: res.status?.field_name,
-                statusFieldType: res.status?.field_type,
-                statusValue: res.status?.value,
-                statusOptions: res.status?.options
-              }
-            }))
             const tableName =
               qtables.find((t) => t.id === form.tableId)?.name ?? "目标表格"
-            setSuccess(`任务已派发至 ${tableName}`)
+            setSuccess(`行动已创建于 ${tableName}`)
             await refresh()
           }}
           open={taskDialogOpen}
@@ -751,7 +689,7 @@ export default function SidePanel() {
               setTaskDialogOpen(true)
             }}
             type="button">
-            {isLoggedIn ? "新建空白任务" : "先登录 QTable"}
+            {isLoggedIn ? "新建空白行动" : "先登录 QNote"}
           </button>
         </div>
       </div>

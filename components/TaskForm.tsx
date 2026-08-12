@@ -10,19 +10,17 @@ type Props = {
   users: QTableUser[]
   selectedText: string
   defaultTitle?: string
-  defaultTableId?: string
   onSubmit: (input: {
     title: string
     assignee: string
     dueDate?: string
     tableId: string
-    includeContextUrl: boolean
   }) => Promise<void>
 }
 
 const defaultTitleFromText = (text: string) => {
   const t = text.trim().slice(0, 30)
-  return t ? `审查 ‘${t}’` : "新建任务"
+  return t ? `审查 ‘${t}’` : "新建行动"
 }
 
 export function TaskForm({
@@ -32,24 +30,17 @@ export function TaskForm({
   users,
   selectedText,
   defaultTitle: preferredTitle,
-  defaultTableId: preferredTableId,
   onSubmit
 }: Props) {
   const defaultTitle = useMemo(
     () => preferredTitle?.trim() || defaultTitleFromText(selectedText),
     [preferredTitle, selectedText]
   )
-  const defaultTableId =
-    preferredTableId && qt.some((t) => t.id === preferredTableId)
-      ? preferredTableId
-      : qt[0]?.id ?? ""
-
   const [title, setTitle] = useState(defaultTitle)
   const [assignee, setAssignee] = useState("")
   const [assigneeQuery, setAssigneeQuery] = useState("")
   const [dueDate, setDueDate] = useState("")
-  const [tableId, setTableId] = useState(defaultTableId)
-  const [includeContextUrl, setIncludeContextUrl] = useState(true)
+  const [tableId, setTableId] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -59,10 +50,9 @@ export function TaskForm({
     setAssignee("")
     setAssigneeQuery("")
     setDueDate("")
-    setTableId(defaultTableId)
-    setIncludeContextUrl(true)
+    setTableId("")
     setError(null)
-  }, [open, defaultTableId, defaultTitle])
+  }, [open, defaultTitle])
 
   const filteredUsers = users.filter((user) => {
     const query = assigneeQuery.trim().toLowerCase()
@@ -79,7 +69,7 @@ export function TaskForm({
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <Dialog.Title className="text-sm font-semibold text-slate-900">
-                创建任务
+                创建行动
               </Dialog.Title>
               <div className="mt-1 line-clamp-2 text-xs text-slate-500">
                 {selectedText}
@@ -96,14 +86,14 @@ export function TaskForm({
 
           <div className="mt-4 space-y-3">
             <div>
-              <div className="text-xs font-medium text-slate-500">任务标题</div>
+              <div className="text-xs font-medium text-slate-500">行动标题</div>
               <input
                 className="mt-1 w-full rounded border border-slate-200 px-2 py-1 text-sm outline-none focus:border-slate-400"
                 onChange={(e) => setTitle(e.target.value)}
                 value={title}
               />
               <div className="mt-1 text-xs text-slate-400">
-                这就是 QTable 中的一行
+                QNote 会将这条行动及其来源关系同步到 QTable
               </div>
             </div>
 
@@ -166,12 +156,14 @@ export function TaskForm({
               </button>
               <div className="flex-1">
                 <div className="text-xs font-medium text-slate-500">
-                  目标表格
+                  目标行动表
                 </div>
                 <select
                   className="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 text-sm outline-none focus:border-slate-400"
+                  disabled={qt.length === 0}
                   onChange={(e) => setTableId(e.target.value)}
                   value={tableId}>
+                  <option disabled value="">请选择目标表</option>
                   {qt.map((t) => (
                     <option key={t.id} value={t.id}>
                       {(t.emoji ? `${t.emoji} ` : "") + t.name} ({t.row_count})
@@ -181,27 +173,8 @@ export function TaskForm({
               </div>
             </div>
 
-            <div className="flex items-center justify-between rounded border border-slate-200 bg-slate-50 px-3 py-2">
-              <div>
-                <div className="text-xs font-medium text-slate-700">
-                  附上下文链接
-                </div>
-                <div className="text-xs text-slate-500">
-                  在任务详情中带上网页链接与选中文案
-                </div>
-              </div>
-              <button
-                aria-checked={includeContextUrl}
-                className={`relative h-6 w-11 shrink-0 rounded-full border p-0 transition-colors ${
-                  includeContextUrl
-                    ? "border-indigo-500 bg-indigo-600"
-                    : "border-slate-300 bg-white"
-                }`}
-                onClick={() => setIncludeContextUrl((v) => !v)}
-                role="switch"
-                type="button">
-                <span className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform" style={{ transform: includeContextUrl ? "translateX(20px)" : "translateX(0)" }} />
-              </button>
+            <div className="rounded border border-indigo-100 bg-indigo-50 px-3 py-2 text-xs text-indigo-800">
+              QNote 会在行动详情中保留网页链接、原文摘录和可回溯的批注来源。
             </div>
           </div>
 
@@ -229,8 +202,7 @@ export function TaskForm({
                     title,
                     assignee,
                     dueDate: dueDate.trim() || undefined,
-                    tableId,
-                    includeContextUrl
+                    tableId
                   })
                   onOpenChange(false)
                 } catch {
@@ -246,7 +218,7 @@ export function TaskForm({
                   创建中…
                 </span>
               ) : (
-                "创建任务"
+                "创建行动"
               )}
             </button>
           </div>

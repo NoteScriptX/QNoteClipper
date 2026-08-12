@@ -1,4 +1,4 @@
-import { getValidAccessToken, QTABLE_API_BASE_URL, QTABLE_WEB_BASE_URL } from "./auth"
+import { getValidAccessToken, QNOTE_API_BASE_URL, QTABLE_WEB_BASE_URL } from "./auth"
 import {
   applyServerAnnotation,
   applyServerAnnotations,
@@ -7,28 +7,126 @@ import {
   type NsXAnnotation
 } from "./storage"
 
-export const QNOTE_API_BASE_URL =
-  process.env.PLASMO_PUBLIC_QNOTE_API_URL || "http://localhost:9200"
+export { QNOTE_API_BASE_URL }
 
-type SharedContext = {
+export type SharedContext = {
   user: { id: number; name: string; email: string }
   workspaces: { id: string; name?: string; role: string }[]
   default_workspace_id?: string
 }
 
-let contextCache: { value: SharedContext; expiresAt: number } | null = null
-
-const getSharedContext = async (): Promise<SharedContext> => {
-  if (contextCache && contextCache.expiresAt > Date.now()) return contextCache.value
-  const response = await authenticatedFetch(`${QTABLE_API_BASE_URL}/api/clipper/context`)
-  if (!response.ok) throw new Error("无法读取 NoteScriptX 工作区")
-  const value = (await response.json()) as SharedContext
-  contextCache = { value, expiresAt: Date.now() + 60_000 }
-  return value
+export type QTable = {
+  id: string
+  name: string
+  emoji?: string
+  row_count: number
 }
 
-const qnoteGraphQL = async <T>(query: string, variables: Record<string, unknown>): Promise<T> => {
-  const response = await authenticatedFetch(`${QNOTE_API_BASE_URL}/graphql`, {
+export type QTableUser = {
+  id: number
+  name: string
+  email: string
+}
+
+export type QTableTaskStatus = {
+  field_id: string
+  field_name: string
+  field_type: string
+  options: { id: string; label: string }[]
+  value?: string
+}
+
+export type UpdateTaskStatusInput = {
+  taskId: string
+  targetTableId: string
+  statusFieldId?: string
+  value: string
+}
+
+export type UpdateTaskStatusResponse = {
+  task_id: string
+  target_table_id: string
+  status: QTableTaskStatus
+}
+
+export type CreateTaskFromAnnotationInput = {
+  annotationId: string
+  task: {
+    title: string
+    assignee_email?: string
+    due_date?: string
+    target_table_id: string
+    note?: string
+  }
+}
+
+export type CreateTaskFromAnnotationResponse = {
+  task_id: string
+  qtable_url: string
+  annotation_status: "task_created"
+  target_table_id?: string
+  record_id?: string
+}
+
+type PageAnnotationContext = {
+  annotation: {
+    id: string
+    clientId?: string
+    type: string
+    selectedText?: string
+    title?: string
+    comment?: string
+    version: number
+    createdAt?: string
+    extra?: Record<string, unknown>
+    assetId?: string
+  }
+  source: { url: string; title?: string; workspaceId: string }
+  anchor?: {
+    xpath?: string
+    textPrefix?: string
+    textSuffix?: string
+    contextText?: string
+    locateStatus?: string
+    anchorPayload?: Record<string, unknown>
+  }
+  relations: {
+    qtableTaskId: string
+    qtableTableId?: string
+    qtableRecordId?: string
+  }[]
+}
+
+let contextCache: { value: SharedContext; expiresAt: number } | null = null
+
+const messageFromPayload = (payload: unknown, fallback: string): string => {
+  if (!payload || typeof payload !== "object") return fallback
+  const value = payload as { detail?: unknown; error?: { message?: unknown }; message?: unknown }
+  if (typeof value.detail === "string") return value.detail
+  if (typeof value.error?.message === "string") return value.error.message
+  return typeof value.message === "string" ? value.message : fallback
+}
+
+async function authenticatedFetch(
+  path: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  const token = await getValidAccessToken()
+  if (!token) throw new Error("请先登录 QNote")
+
+  const headers = new Headers(options.headers)
+  headers.set("Authorization", `Bearer ${token}`)
+  if (options.body && !headers.has("Content-Type") && !(options.body instanceof FormData)) {
+    headers.set("Content-Type", "application/json")
+  }
+  return await fetch(`${QNOTE_API_BASE_URL}${path}`, { ...options, headers })
+}
+
+const qnoteGraphQL = async <T>(
+  query: string,
+  variables: Record<string, unknown>
+): Promise<T> => {
+  const response = await authenticatedFetch("/graphql", {
     method: "POST",
     body: JSON.stringify({ query, variables })
   })
@@ -44,20 +142,28 @@ const qnoteGraphQL = async <T>(query: string, variables: Record<string, unknown>
   return payload.data
 }
 
+export const getSharedContext = async (): Promise<SharedContext> => {
+  if (contextCache && contextCache.expiresAt > Date.now()) return contextCache.value
+  const response = await authenticatedFetch("/api/clipper/context")
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(messageFromPayload(payload, "无法读取 QNote 工作区"))
+  const value = payload as SharedContext
+  contextCache = { value, expiresAt: Date.now() + 60_000 }
+  return value
+}
+
 const uploadScreenshot = async (
   dataUrl: string,
   workspaceId: string,
   annotationId: string
 ): Promise<string> => {
-  const token = await getValidAccessToken()
-  if (!token) throw new Error("Not authenticated. Please log in.")
   const blob = await fetch(dataUrl).then((response) => response.blob())
   const body = new FormData()
   body.append("type", "screenshot")
   body.append("file", blob, `qnote-${annotationId}.png`)
-  const response = await fetch(
-    `${QNOTE_API_BASE_URL}/api/assets/upload?workspace_id=${encodeURIComponent(workspaceId)}`,
-    { method: "POST", headers: { Authorization: `Bearer ${token}` }, body }
+  const response = await authenticatedFetch(
+    `/api/assets/upload?workspace_id=${encodeURIComponent(workspaceId)}`,
+    { method: "POST", body }
   )
   const payload = await response.json().catch(() => ({})) as { id?: string; detail?: string }
   if (!response.ok || !payload.id) throw new Error(payload.detail || "批注截图上传失败")
@@ -76,11 +182,9 @@ export const syncAnnotationToQNote = async (
 ): Promise<NsXAnnotation> => {
   const context = await getSharedContext()
   const workspaceId = annotation.workspaceId || context.default_workspace_id || context.workspaces[0]?.id
-  if (!workspaceId) throw new Error("当前账号没有可用工作区")
+  if (!workspaceId) throw new Error("当前账号没有可用 QNote 工作区")
 
-  const sourceData = await qnoteGraphQL<{
-    upsertWebSource: { id: string }
-  }>(
+  const sourceData = await qnoteGraphQL<{ upsertWebSource: { id: string } }>(
     `mutation UpsertSource($input: UpsertWebSourceInput!) {
       upsertWebSource(input: $input) { id }
     }`,
@@ -88,9 +192,8 @@ export const syncAnnotationToQNote = async (
   )
 
   let assetId = annotation.assetId
-  const screenshotDataUrl = (annotation as NsXAnnotation & { screenshotDataUrl?: string }).screenshotDataUrl
-  if (!assetId && screenshotDataUrl) {
-    assetId = await uploadScreenshot(screenshotDataUrl, workspaceId, annotation.id)
+  if (!assetId && annotation.screenshotDataUrl) {
+    assetId = await uploadScreenshot(annotation.screenshotDataUrl, workspaceId, annotation.id)
   }
 
   const anchor = {
@@ -107,9 +210,7 @@ export const syncAnnotationToQNote = async (
 
   let server: { id: string; version: number }
   if (annotation.serverId) {
-    const data = await qnoteGraphQL<{
-      updateAnnotation: { annotation: { id: string; version: number } }
-    }>(
+    const data = await qnoteGraphQL<{ updateAnnotation: { annotation: { id: string; version: number } } }>(
       `mutation UpdateAnnotation($input: UpdateAnnotationInput!) {
         updateAnnotation(input: $input) { annotation { id version } }
       }`,
@@ -129,9 +230,7 @@ export const syncAnnotationToQNote = async (
     )
     server = data.updateAnnotation.annotation
   } else {
-    const data = await qnoteGraphQL<{
-      createAnnotation: { annotation: { id: string; version: number } }
-    }>(
+    const data = await qnoteGraphQL<{ createAnnotation: { annotation: { id: string; version: number } } }>(
       `mutation CreateAnnotation($input: CreateAnnotationInput!) {
         createAnnotation(input: $input) { annotation { id version } }
       }`,
@@ -167,35 +266,6 @@ export const syncAnnotationToQNote = async (
   }
   await applyServerAnnotation(synced)
   return synced
-}
-
-type PageAnnotationContext = {
-  annotation: {
-    id: string
-    clientId?: string
-    type: string
-    selectedText?: string
-    title?: string
-    comment?: string
-    version: number
-    createdAt?: string
-    extra?: Record<string, unknown>
-    assetId?: string
-  }
-  source: { url: string; title?: string; workspaceId: string }
-  anchor?: {
-    xpath?: string
-    textPrefix?: string
-    textSuffix?: string
-    contextText?: string
-    locateStatus?: string
-    anchorPayload?: Record<string, unknown>
-  }
-  relations: {
-    qtableTaskId: string
-    qtableTableId?: string
-    qtableRecordId?: string
-  }[]
 }
 
 export const hydrateAnnotationsFromQNote = async (url: string): Promise<void> => {
@@ -257,202 +327,50 @@ export const hydrateAnnotationsFromQNote = async (url: string): Promise<void> =>
   await applyServerAnnotations(hydrated)
 }
 
-export type QTable = {
-  id: string
-  name: string
-  emoji?: string
-  row_count: number
-}
-
-export type QTableUser = {
-  id: number
-  name: string
-  email: string
-}
-
-/**
- * Helper function to make authenticated API requests
- */
-async function authenticatedFetch(
-  url: string,
-  options: RequestInit = {},
-  retryCount = 0
-): Promise<Response> {
-  const token = await getValidAccessToken()
-  
-  if (!token) {
-    throw new Error("Not authenticated. Please log in.")
-  }
-
-  const headers = {
-    ...options.headers,
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json"
-  }
-
-  const response = await fetch(url, {
-    ...options,
-    headers
-  })
-
-  // Handle 401 - token might be expired
-  if (response.status === 401 && retryCount === 0) {
-    // Force token refresh by clearing cached state
-    const newToken = await getValidAccessToken()
-    if (newToken && newToken !== token) {
-      // Retry with new token
-      headers.Authorization = `Bearer ${newToken}`
-      return await fetch(url, {
-        ...options,
-        headers
-      })
-    }
-  }
-
-  return response
-}
-
-export const getQtables = async (): Promise<QTable[]> => {
-  const response = await authenticatedFetch(`${QTABLE_API_BASE_URL}/api/clipper/tables`)
-  if (!response.ok) throw new Error("加载 QTable 表格失败")
-  return (await response.json()) as QTable[]
-}
-
-export const getQtableUsers = async (): Promise<QTableUser[]> => {
-  const response = await authenticatedFetch(`${QTABLE_API_BASE_URL}/api/clipper/users`)
-  if (!response.ok) throw new Error("加载 QTable 用户失败")
-  return (await response.json()) as QTableUser[]
-}
-
-export type ApiError = {
-  error: string
-  message: string
-}
-
-export type CreateTaskFromAnnotationInput = {
-  annotationId: string
-  task: {
-    title: string
-    assignee_email?: string
-    due_date?: string
-    target_table_id: string
-    include_context_url?: boolean
-    note?: string
-    selected_text?: string
-    page_url?: string
-    page_title?: string
-    mode?: "highlight" | "line" | "box" | "underline"
-    screenshot_data_url?: string
-  }
-}
-
-export type CreateTaskFromAnnotationResponse = {
-  task_id: string
-  qtable_url: string
-  annotation_status: "task_created"
-  target_table_id?: string
-  status?: QTableTaskStatus
-}
-
-export type QTableTaskStatus = {
-  field_id: string
-  field_name: string
-  field_type: string
-  options: { id: string; label: string }[]
-  value?: string
-}
-
-export type UpdateTaskStatusInput = {
-  taskId: string
-  targetTableId: string
-  statusFieldId?: string
-  value: string
-}
-
-export type UpdateTaskStatusResponse = {
-  task_id: string
-  target_table_id: string
-  status: QTableTaskStatus
+export const getActionOptions = async (): Promise<{ tables: QTable[]; users: QTableUser[] }> => {
+  const response = await authenticatedFetch("/api/clipper/action-options")
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(messageFromPayload(payload, "无法加载行动选项"))
+  return payload as { tables: QTable[]; users: QTableUser[] }
 }
 
 export const getTaskStatus = async (
   taskId: string,
   targetTableId: string
 ): Promise<UpdateTaskStatusResponse> => {
-  const response = await authenticatedFetch(QTABLE_API_BASE_URL + "/api/clipper/tasks/" + encodeURIComponent(taskId) + "/status?target_table_id=" + encodeURIComponent(targetTableId))
-  const data = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(data.detail || "读取 QTable 任务状态失败")
-  return data as UpdateTaskStatusResponse
+  const response = await authenticatedFetch(
+    `/api/clipper/tasks/${encodeURIComponent(taskId)}/status?target_table_id=${encodeURIComponent(targetTableId)}`
+  )
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(messageFromPayload(payload, "读取行动状态失败"))
+  return payload as UpdateTaskStatusResponse
 }
 
-type StoredTask = {
-  task_id: string
-  annotation_id: string
-  title: string
-  assignee_email: string
-  due_date?: string
-  target_table_id: string
-  include_context_url: boolean
-  created_at: string
-  qtable_url: string
+export const updateTaskStatus = async (
+  input: UpdateTaskStatusInput
+): Promise<UpdateTaskStatusResponse> => {
+  const response = await authenticatedFetch(
+    `/api/clipper/tasks/${encodeURIComponent(input.taskId)}/status`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({
+        target_table_id: input.targetTableId,
+        status_field_id: input.statusFieldId,
+        value: input.value
+      })
+    }
+  )
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(messageFromPayload(payload, "更新行动状态失败"))
+  return payload as UpdateTaskStatusResponse
 }
-
-const delay = async <T>(value: T, ms: number): Promise<T> =>
-  await new Promise((resolve) => setTimeout(() => resolve(value), ms))
-
-const tasksKey = "nsx_mock_tasks_v2"
-
-const readTasks = (): StoredTask[] => {
-  try {
-    const raw = localStorage.getItem(tasksKey)
-    if (!raw) return []
-    const parsed = JSON.parse(raw) as unknown
-    return Array.isArray(parsed) ? (parsed as StoredTask[]) : []
-  } catch {
-    return []
-  }
-}
-
-const writeTasks = (tasks: StoredTask[]) => {
-  localStorage.setItem(tasksKey, JSON.stringify(tasks))
-}
-
-const genTaskId = (tasks: StoredTask[]) => {
-  const n = tasks.length + 1
-  return `task_${String(n).padStart(4, "0")}`
-}
-
-const isValidDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s)
 
 export const createTaskFromAnnotation = async (
   input: CreateTaskFromAnnotationInput
 ): Promise<CreateTaskFromAnnotationResponse> => {
-  // Validation (keep existing validation logic)
   const title = input.task.title.trim()
-  if (title.length < 1 || title.length > 200) {
-    throw {
-      error: "invalid_title",
-      message: "任务标题长度需为 1-200 字符。"
-    } satisfies ApiError
-  }
-
-  const assigneeEmail = (input.task.assignee_email ?? "").trim()
-
-  const dueDate = input.task.due_date?.trim()
-  if (dueDate && !isValidDate(dueDate)) {
-    throw {
-      error: "invalid_due_date",
-      message: "截止日期格式应为 YYYY-MM-DD。"
-    } satisfies ApiError
-  }
-
-  const tableId = input.task.target_table_id.trim()
-  if (!tableId) {
-    throw {
-      error: "invalid_target_table_id",
-      message: "请选择目标表格。"
-    } satisfies ApiError
-  }
+  if (!title || title.length > 200) throw new Error("行动标题长度需为 1-200 字符")
+  if (!input.task.target_table_id.trim()) throw new Error("请选择目标行动表")
 
   const local = await getAnnotationById(input.annotationId)
   if (!local) throw new Error("批注不存在")
@@ -466,6 +384,8 @@ export const createTaskFromAnnotation = async (
     note: input.task.note ?? local.note,
     pendingTaskMutationId: mutationId
   })
+  if (!synced.serverId) throw new Error("批注尚未同步到 QNote")
+
   const data = await qnoteGraphQL<{
     createTaskFromAnnotations: {
       taskId: string
@@ -482,117 +402,28 @@ export const createTaskFromAnnotation = async (
     {
       input: {
         annotationIds: [synced.serverId],
-        targetTableId: tableId,
+        targetTableId: input.task.target_table_id,
         title,
-        assigneeEmail: assigneeEmail || null,
-        dueDate: dueDate || null,
+        assigneeEmail: input.task.assignee_email?.trim() || null,
+        dueDate: input.task.due_date || null,
         workspaceId: synced.workspaceId,
         clientMutationId: mutationId
       }
     }
   )
   const task = data.createTaskFromAnnotations
+  const tableId = task.tableId || input.task.target_table_id
+  const qtableUrl = task.qtableUrl || `${QTABLE_WEB_BASE_URL}/table/${tableId}?row=${task.recordId || task.taskId}`
   await applyServerAnnotation({
     ...synced,
     pendingTaskMutationId: undefined,
-    task: {
-      status: "created",
-      taskId: task.taskId,
-      tableId: task.tableId || tableId,
-      qtableUrl: task.qtableUrl
-    }
+    task: { status: "created", taskId: task.taskId, tableId, qtableUrl }
   })
   return {
     task_id: task.taskId,
-    qtable_url: task.qtableUrl || `${QTABLE_WEB_BASE_URL}/table/${task.tableId || tableId}?row=${task.recordId || task.taskId}`,
+    record_id: task.recordId,
+    qtable_url: qtableUrl,
     annotation_status: "task_created",
-    target_table_id: task.tableId || tableId
+    target_table_id: tableId
   }
-}
-
-export const updateTaskStatus = async (
-  input: UpdateTaskStatusInput
-): Promise<UpdateTaskStatusResponse> => {
-  const response = await authenticatedFetch(`${QTABLE_API_BASE_URL}/api/clipper/tasks/${encodeURIComponent(input.taskId)}/status`, {
-    method: "PATCH",
-    body: JSON.stringify({
-      target_table_id: input.targetTableId,
-      status_field_id: input.statusFieldId,
-      value: input.value
-    })
-  })
-  const data = await response.json().catch(() => ({}))
-  if (!response.ok) throw new Error(data.detail || "更新 QTable 任务状态失败")
-  return data as UpdateTaskStatusResponse
-}
-
-export type UserMe = {
-  id: string
-  name: string
-  email: string
-  avatar_url: string
-}
-
-export const getUserMe = async (): Promise<UserMe> => {
-  const response = await authenticatedFetch(`${QTABLE_API_BASE_URL}/oauth/me`)
-  if (!response.ok) throw new Error("获取用户信息失败")
-  return (await response.json()) as UserMe
-}
-
-export type AnnotationTaskDTO = {
-  id: string
-  status: "open"
-  assignee_email: string
-  due_date?: string
-}
-
-export type AnnotationDTO = {
-  id: string
-  page_url: string
-  page_title: string
-  selected_text: string
-  note: string
-  created_at: string
-  task: AnnotationTaskDTO | null
-}
-
-export const getAnnotation = async (input: {
-  annotationId: string
-  local?: {
-    url: string
-    pageTitle: string
-    selectedText: string
-    note: string
-    createdAt: number
-    task?: { taskId: string }
-  }
-}): Promise<AnnotationDTO> => {
-  const a = input.local
-  if (!a) {
-    throw { error: "not_found", message: "批注不存在。" } satisfies ApiError
-  }
-  const tasks = readTasks()
-  const t = a.task?.taskId
-    ? tasks.find((x) => x.task_id === a.task?.taskId)
-    : undefined
-
-  return await delay(
-    {
-      id: input.annotationId,
-      page_url: a.url,
-      page_title: a.pageTitle,
-      selected_text: a.selectedText,
-      note: a.note,
-      created_at: new Date(a.createdAt).toISOString(),
-      task: t
-        ? {
-            id: t.task_id,
-            status: "open",
-            assignee_email: t.assignee_email,
-            due_date: t.due_date
-          }
-        : null
-    },
-    140
-  )
 }
