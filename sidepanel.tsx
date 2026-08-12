@@ -14,7 +14,7 @@ import { TaskForm } from "~components/TaskForm";
 import { createTaskFromAnnotation, getActionOptions, getTaskStatus, hydrateAnnotationsFromQNote, updateTaskStatus, type QTable, type QTableUser } from "~utils/api";
 import { CONTENT_OPEN_SIDEPANEL_WITH_ANNOTATION, STORAGE_UPDATED, type BackgroundBroadcastMessage, type OpenSidePanelPayload } from "~utils/messaging";
 import { getSettings, patchSettings, type NsXSettings } from "~utils/settings";
-import { getAllAnnotations, getAnnotationById, normalizePageUrl, NSX_ANNOTATIONS_KEY, updateAnnotationById } from "~utils/storage";
+import { getAllAnnotations, getAnnotationById, normalizePageUrl, NSX_ANNOTATIONS_KEY, updateAnnotationLocallyById } from "~utils/storage";
 import { getAuthState } from "~utils/auth";
 
 
@@ -63,6 +63,7 @@ export default function SidePanel() {
   const [items, setItems] = useState<AnnotationPreview[]>([])
   const [qtables, setQtables] = useState<QTable[]>([])
   const [qtableUsers, setQtableUsers] = useState<QTableUser[]>([])
+  const [isActionOptionsLoading, setIsActionOptionsLoading] = useState(false)
   const [pageChoices, setPageChoices] = useState<PageChoice[]>([])
   const [selectedPageUrl, setSelectedPageUrl] = useState<string | null>(null)
   const [taskDialogOpen, setTaskDialogOpen] = useState(false)
@@ -77,6 +78,8 @@ export default function SidePanel() {
   const [loginEmail, setLoginEmail] = useState("")
   const [loginPassword, setLoginPassword] = useState("")
   const successTimerRef = useRef<number | null>(null)
+  const refreshInFlightRef = useRef<Promise<void> | null>(null)
+  const actionOptionsInFlightRef = useRef<Promise<void> | null>(null)
   const isLoggedIn = settings?.loggedIn === true
 
   const pendingText = pending?.selectedText ?? ""
@@ -88,10 +91,13 @@ export default function SidePanel() {
   const selectedPage = pageChoices.find((page) => page.url === displayUrl)
   const displayTitle = selectedPageUrl ? (selectedPage?.title || shortUrl(displayUrl)) : pageInfo.title
 
-  const refresh = useCallback(async (forceCurrent = false) => {
-    setIsRefreshing(true)
-    setError(null)
-    try {
+  const refresh = useCallback((forceCurrent = false): Promise<void> => {
+    if (refreshInFlightRef.current) return refreshInFlightRef.current
+
+    const job = (async () => {
+      setIsRefreshing(true)
+      setError(null)
+      try {
       // Check auth state first
       const authState = await getAuthState()
       
@@ -108,11 +114,6 @@ export default function SidePanel() {
         return
       }
 
-      const actionOptions = await getActionOptions()
-      const qts = actionOptions.tables
-      setQtables(qts)
-      setQtableUsers(actionOptions.users)
-
       // Pull the authoritative server copy before rendering. QNote outages do
       // not block access to the extension's offline cache.
       try {
@@ -125,7 +126,22 @@ export default function SidePanel() {
         // automatically when the service is reachable again.
       }
 
-      setSettings({ ...st, loggedIn: true, userEmail: authState.user?.email ?? st.userEmail, userName: authState.user?.name ?? st.userName, userAvatar: authState.user?.avatar_url ?? st.userAvatar })
+      setSettings((current) => {
+        const next = {
+          ...st,
+          loggedIn: true,
+          userEmail: authState.user?.email ?? st.userEmail,
+          userName: authState.user?.name ?? st.userName,
+          userAvatar: authState.user?.avatar_url ?? st.userAvatar
+        }
+        return current &&
+          current.loggedIn === next.loggedIn &&
+          current.userEmail === next.userEmail &&
+          current.userName === next.userName &&
+          current.userAvatar === next.userAvatar
+          ? current
+          : next
+      })
 
       const allAnnotations = await getAllAnnotations()
       const choices = new Map<string, PageChoice>()
@@ -168,7 +184,7 @@ export default function SidePanel() {
         try {
           const remote = await getTaskStatus(item.task.taskId, item.task.tableId)
           if (remote.status.value !== item.task.statusValue || remote.status.field_id !== item.task.statusFieldId) {
-            await updateAnnotationById(item.id, (annotation) => annotation.task?.status === "created" ? {
+            await updateAnnotationLocallyById(item.id, (annotation) => annotation.task?.status === "created" ? {
               ...annotation,
               task: {
                 ...annotation.task,
@@ -196,18 +212,64 @@ export default function SidePanel() {
         }
       }))
       setItems(hydratedItems)
-    } catch (err) {
-      if (err instanceof Error && err.message.includes("Not authenticated")) {
-        setError("登录已过期，请重新登录 QNote")
-        await patchSettings({ loggedIn: false })
-        setSettings(await getSettings())
-      } else {
-        setError(err instanceof Error ? err.message : "加载失败，请重试")
+      } catch (err) {
+        if (err instanceof Error && err.message.includes("Not authenticated")) {
+          setError("登录已过期，请重新登录 QNote")
+          await patchSettings({ loggedIn: false })
+          setSettings(await getSettings())
+        } else {
+          setError(err instanceof Error ? err.message : "加载失败，请重试")
+        }
+      } finally {
+        setIsRefreshing(false)
       }
-    } finally {
-      setIsRefreshing(false)
-    }
+    })()
+    refreshInFlightRef.current = job
+    void job.finally(() => {
+      if (refreshInFlightRef.current === job) refreshInFlightRef.current = null
+    })
+    return job
   }, [selectedPageUrl])
+
+  const loadActionOptions = useCallback(async (): Promise<void> => {
+    if (actionOptionsInFlightRef.current) return actionOptionsInFlightRef.current
+
+    const job = (async () => {
+      setIsActionOptionsLoading(true)
+      try {
+        const actionOptions = await getActionOptions()
+        setQtables(actionOptions.tables)
+        setQtableUsers(actionOptions.users)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "无法加载可用目标表")
+      } finally {
+        setIsActionOptionsLoading(false)
+      }
+    })()
+    actionOptionsInFlightRef.current = job
+    void job.finally(() => {
+      if (actionOptionsInFlightRef.current === job) actionOptionsInFlightRef.current = null
+    })
+    return job
+  }, [])
+
+  const openTaskDialog = async (annotationId: string) => {
+    const item = items.find((candidate) => candidate.id === annotationId)
+    if (!item) return
+    setPending({
+      annotationId,
+      url: displayUrl,
+      selectedText: item.selectedText,
+      title: item.title,
+      mode: item.mode
+    })
+    if (!isLoggedIn) {
+      setActiveTab("settings")
+      return
+    }
+    setTaskDialogOpen(true)
+    await loadActionOptions()
+  }
 
   const handleLogin = async () => {
     const email = loginEmail.trim()
@@ -244,7 +306,7 @@ export default function SidePanel() {
         statusFieldId: item.task.statusFieldId,
         value
       })
-      await updateAnnotationById(annotationId, (annotation) => ({
+      await updateAnnotationLocallyById(annotationId, (annotation) => ({
         ...annotation,
         task: annotation.task?.status === "created" ? {
           ...annotation.task,
@@ -308,6 +370,7 @@ export default function SidePanel() {
         if (pending) {
           setActiveTab("annotations")
           setTaskDialogOpen(true)
+          void loadActionOptions()
         }
         setIsLoggingIn(false)
         setSuccess("登录成功")
@@ -327,7 +390,7 @@ export default function SidePanel() {
     }
     chrome.runtime.onMessage.addListener(handleAuthMessage)
     return () => chrome.runtime.onMessage.removeListener(handleAuthMessage)
-  }, [pending, refresh])
+  }, [loadActionOptions, pending, refresh])
 
   useEffect(() => {
     if (!success) return
@@ -351,7 +414,10 @@ export default function SidePanel() {
     const listener = (message: BackgroundBroadcastMessage) => {
       if (message?.type === CONTENT_OPEN_SIDEPANEL_WITH_ANNOTATION) {
         setPending(message.payload)
-        if (isLoggedIn) setTaskDialogOpen(true)
+        if (isLoggedIn) {
+          setTaskDialogOpen(true)
+          void loadActionOptions()
+        }
         else setActiveTab("settings")
         return
       }
@@ -359,13 +425,17 @@ export default function SidePanel() {
       if (message?.type === STORAGE_UPDATED) {
         const p = message.payload
         if (p?.key !== NSX_ANNOTATIONS_KEY) return
-        if (p.urls && displayUrl && !p.urls.includes(displayUrl)) return
-        refresh()
+        // QNote hydration also persists server metadata locally. It has no
+        // changed page URL, so treating it as a new capture creates a
+        // refresh -> storage update -> refresh loop.
+        if (!p.urls?.length) return
+        if (displayUrl && !p.urls.includes(displayUrl)) return
+        void refresh()
       }
     }
     chrome.runtime.onMessage.addListener(listener)
     return () => chrome.runtime.onMessage.removeListener(listener)
-  }, [displayUrl, pageInfo.url, refresh, isLoggedIn])
+  }, [displayUrl, isLoggedIn, loadActionOptions, refresh])
 
   return (
     <div className="min-h-screen bg-slate-50 pb-14 text-slate-900">
@@ -538,22 +608,7 @@ export default function SidePanel() {
               <AnnotationList
                 items={items}
                 onStatusChange={handleStatusChange}
-                onCreateTask={(annotationId) => {
-                  const it = items.find((x) => x.id === annotationId)
-                  if (!it) return
-                  setPending({
-                    annotationId,
-                    url: displayUrl,
-                    selectedText: it.selectedText,
-                    title: it.title,
-                    mode: it.mode
-                  })
-                  if (!isLoggedIn) {
-                    setActiveTab("settings")
-                    return
-                  }
-                  setTaskDialogOpen(true)
-                }}
+                onCreateTask={(annotationId) => void openTaskDialog(annotationId)}
               />
             )}
           </>
@@ -658,6 +713,7 @@ export default function SidePanel() {
           open={taskDialogOpen}
           qt={qtables}
           users={qtableUsers}
+          loading={isActionOptionsLoading}
           selectedText={pendingText}
           defaultTitle={pending.title}
         />
@@ -687,6 +743,7 @@ export default function SidePanel() {
                 mode: "highlight"
               })
               setTaskDialogOpen(true)
+              void loadActionOptions()
             }}
             type="button">
             {isLoggedIn ? "新建空白行动" : "先登录 QNote"}

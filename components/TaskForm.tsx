@@ -8,6 +8,7 @@ type Props = {
   onOpenChange: (open: boolean) => void
   qt: QTable[]
   users: QTableUser[]
+  loading?: boolean
   selectedText: string
   defaultTitle?: string
   onSubmit: (input: {
@@ -28,6 +29,7 @@ export function TaskForm({
   onOpenChange,
   qt,
   users,
+  loading = false,
   selectedText,
   defaultTitle: preferredTitle,
   onSubmit
@@ -160,15 +162,23 @@ export function TaskForm({
                 </div>
                 <select
                   className="mt-1 w-full rounded border border-slate-200 bg-white px-2 py-1 text-sm outline-none focus:border-slate-400"
-                  disabled={qt.length === 0}
+                  disabled={loading || qt.length === 0}
                   onChange={(e) => setTableId(e.target.value)}
                   value={tableId}>
-                  <option disabled value="">请选择目标表</option>
-                  {qt.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {(t.emoji ? `${t.emoji} ` : "") + t.name} ({t.row_count})
-                    </option>
-                  ))}
+                  {loading ? (
+                    <option value="">正在加载可用目标表…</option>
+                  ) : qt.length === 0 ? (
+                    <option value="">暂无可用目标表</option>
+                  ) : (
+                    <>
+                      <option disabled value="">请选择目标表</option>
+                      {qt.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {(t.emoji ? `${t.emoji} ` : "") + t.name} ({t.row_count})
+                        </option>
+                      ))}
+                    </>
+                  )}
                 </select>
               </div>
             </div>

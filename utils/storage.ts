@@ -70,6 +70,8 @@ export const getAnnotationById = async (
 export const setAllAnnotations = async (
   annotations: NsXAnnotation[]
 ): Promise<void> => {
+  const current = await getAllAnnotations()
+  if (JSON.stringify(current) === JSON.stringify(annotations)) return
   await chrome.storage.local.set({
     [NSX_ANNOTATIONS_KEY]: annotations
   })
@@ -111,6 +113,34 @@ export const updateAnnotationById = async (
   await setAllAnnotations(next)
 }
 
+/** Update display-only metadata without scheduling another QNote sync. */
+export const updateAnnotationLocallyById = async (
+  id: string,
+  updater: (a: NsXAnnotation) => NsXAnnotation
+): Promise<void> => {
+  const all = await getAllAnnotations()
+  const idx = all.findIndex((a) => a.id === id)
+  if (idx < 0) return
+  const next = [...all]
+  next[idx] = updater(next[idx])
+  await setAllAnnotations(next)
+}
+
+const mergeServerAnnotation = (
+  current: NsXAnnotation,
+  incoming: NsXAnnotation
+): NsXAnnotation => {
+  const currentTask = current.task
+  const incomingTask = incoming.task
+  const task =
+    currentTask?.status === "created" &&
+    incomingTask?.status === "created" &&
+    currentTask.taskId === incomingTask.taskId
+      ? { ...currentTask, ...incomingTask }
+      : incomingTask
+  return { ...current, ...incoming, task }
+}
+
 export const applyServerAnnotation = async (
   annotation: NsXAnnotation
 ): Promise<void> => {
@@ -121,7 +151,7 @@ export const applyServerAnnotation = async (
       (annotation.serverId && item.serverId === annotation.serverId)
   )
   const synced = { ...annotation, syncStatus: "synced" as const, syncError: undefined }
-  if (idx >= 0) next[idx] = { ...next[idx], ...synced }
+  if (idx >= 0) next[idx] = mergeServerAnnotation(next[idx], synced)
   else next.unshift(synced)
   await setAllAnnotations(next)
 }
@@ -142,7 +172,7 @@ export const applyServerAnnotations = async (
       syncStatus: "synced" as const,
       syncError: undefined
     }
-    if (idx >= 0) next[idx] = { ...next[idx], ...synced }
+    if (idx >= 0) next[idx] = mergeServerAnnotation(next[idx], synced)
     else next.unshift(synced)
   }
   await setAllAnnotations(next)

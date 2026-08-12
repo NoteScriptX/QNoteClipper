@@ -7,9 +7,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnnotationCard } from "~components/AnnotationCard";
 import { Bubble } from "~components/Bubble";
 import { createFingerprintFromRange, createFingerprintFromSelection, getMergedClientRects, locateRangeFromFingerprint } from "~utils/anchor";
-import { CLIPPER_CAPTURE_ANNOTATION_IMAGE, CLIPPER_CREATE_TASK, CLIPPER_GET_TASK_OPTIONS, CONTENT_ACTIVATE_DRAW_MODE, CONTENT_OPEN_SELECTION_CARD, requestFromBackground, STORAGE_UPDATED } from "~utils/messaging";
+import { CLIPPER_CAPTURE_ANNOTATION_IMAGE, CONTENT_ACTIVATE_DRAW_MODE, CONTENT_OPEN_SELECTION_CARD, requestFromBackground, STORAGE_UPDATED } from "~utils/messaging";
 import { getAnnotationsByUrl, normalizePageUrl, NSX_ANNOTATIONS_KEY, upsertAnnotation, type AnnotationMode, type NsXAnnotation } from "~utils/storage";
-import type { QTable, QTableUser } from "~utils/api";
 
 
 
@@ -231,7 +230,6 @@ export default function Content() {
   const boxStartRef = useRef<{ x: number; y: number } | null>(null)
   const linePointsRef = useRef<{ x: number; y: number }[] | null>(null)
   const traceHandledRef = useRef(false)
-  const [taskOptions, setTaskOptions] = useState<{ tables: QTable[]; users: QTableUser[]; error?: string; loading: boolean }>({ tables: [], users: [], loading: false })
 
   const url = useMemo(() => normalizePageUrl(window.location.href), [])
   const traceAnnotationId = useMemo(() => {
@@ -317,14 +315,6 @@ export default function Content() {
     chrome.runtime.onMessage.addListener(listener)
     return () => chrome.runtime.onMessage.removeListener(listener)
   }, [refreshHighlights, url])
-
-  useEffect(() => {
-    if (!card.visible) return
-    setTaskOptions((previous) => ({ ...previous, loading: true, error: undefined }))
-    requestFromBackground<{ ok: boolean; tables?: QTable[]; users?: QTableUser[]; error?: string }>({ type: CLIPPER_GET_TASK_OPTIONS })
-      .then((response) => setTaskOptions(response.ok ? { tables: response.tables ?? [], users: response.users ?? [], loading: false } : { tables: [], users: [], loading: false, error: response.error || "请先登录 QNote" }))
-      .catch(() => setTaskOptions({ tables: [], users: [], loading: false, error: "无法连接 QNote" }))
-  }, [card.visible])
 
   useEffect(() => {
     const isInCsui = (e: MouseEvent) => {
@@ -656,28 +646,6 @@ export default function Content() {
             drawModeRef.current = null
             document.documentElement.style.cursor = ""
             setCard({ visible: false })
-          }}
-          taskOptions={taskOptions}
-          onCreateTask={async (input) => {
-            const draft = card.draft
-            await saveDraft(draft, input)
-            const response = await requestFromBackground<{ ok: boolean; task?: { task_id: string; qtable_url: string; target_table_id?: string }; error?: string }>({
-              type: CLIPPER_CREATE_TASK,
-              payload: {
-                annotationId: draft.id,
-                title: input.title,
-                note: input.note,
-                selectedText: draft.selectedText,
-                pageUrl: draft.url,
-                pageTitle: draft.pageTitle,
-                mode: draft.mode,
-                tableId: input.tableId,
-                assigneeEmail: input.assigneeEmail,
-                dueDate: input.dueDate,
-                screenshotDataUrl: draft.screenshotDataUrl
-              }
-            })
-            if (!response.ok || !response.task) throw new Error(response.error || "创建行动失败")
           }}
           onSave={async (input) => {
             const draft = card.draft
