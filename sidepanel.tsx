@@ -11,10 +11,10 @@ import "~style.css";
 
 import { AnnotationList, type AnnotationPreview } from "~components/AnnotationList";
 import { TaskForm } from "~components/TaskForm";
-import { createTaskFromAnnotation, getActionOptions, getTaskStatus, hydrateAnnotationsFromQNote, updateTaskStatus, type QTable, type QTableUser } from "~utils/api";
-import { CONTENT_OPEN_SIDEPANEL_WITH_ANNOTATION, STORAGE_UPDATED, type BackgroundBroadcastMessage, type OpenSidePanelPayload } from "~utils/messaging";
+import { createTaskFromAnnotation, deleteAnnotationFromQNote, getActionOptions, getTaskStatus, hydrateAnnotationsFromQNote, updateTaskStatus, type QTable, type QTableUser } from "~utils/api";
+import { CONTENT_LOCATE_ANNOTATION, CONTENT_OPEN_SIDEPANEL_WITH_ANNOTATION, STORAGE_UPDATED, type BackgroundBroadcastMessage, type OpenSidePanelPayload } from "~utils/messaging";
 import { getSettings, patchSettings, type NsXSettings } from "~utils/settings";
-import { getAllAnnotations, getAnnotationById, normalizePageUrl, NSX_ANNOTATIONS_KEY, updateAnnotationLocallyById } from "~utils/storage";
+import { deleteAnnotationLocallyById, getAllAnnotations, getAnnotationById, normalizePageUrl, NSX_ANNOTATIONS_KEY, updateAnnotationById, updateAnnotationLocallyById, upsertAnnotation } from "~utils/storage";
 import { getAuthState } from "~utils/auth";
 
 
@@ -164,6 +164,8 @@ export default function SidePanel() {
         note: a.note,
         createdAt: a.createdAt,
         pageTitle: a.pageTitle,
+        syncStatus: a.syncStatus,
+        syncError: a.syncError,
         task:
           a.task?.status === "created"
             ? {
@@ -332,6 +334,61 @@ export default function SidePanel() {
       setSuccess(`行动状态已更新为 ${result.status.options.find((option) => option.id === result.status.value)?.label || result.status.value}`)
     } catch (err) {
       setError(err instanceof Error ? err.message : "更新行动状态失败")
+    }
+  }
+
+  const handleLocate = async (annotationId: string) => {
+    const annotation = await getAnnotationById(annotationId)
+    if (!annotation) {
+      setError("批注不存在或已被删除")
+      return
+    }
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+    if (!tab?.id) {
+      setError("无法定位当前浏览器标签页")
+      return
+    }
+    if (normalizePageUrl(tab.url || "") === normalizePageUrl(annotation.url)) {
+      try {
+        await chrome.tabs.sendMessage(tab.id, { type: CONTENT_LOCATE_ANNOTATION, annotationId })
+      } catch {
+        setError("当前页面尚未加载 QNote Clipper，请刷新网页后重试")
+        return
+      }
+    } else {
+      const target = new URL(annotation.url)
+      target.searchParams.set("qnote_annotation", annotation.serverId || annotation.id)
+      await chrome.tabs.update(tab.id, { url: target.toString() })
+    }
+    setSuccess("正在定位原文…")
+  }
+
+  const handleUpdateAnnotation = async (
+    annotationId: string,
+    input: { title: string; note: string }
+  ) => {
+    await updateAnnotationById(annotationId, (annotation) => ({
+      ...annotation,
+      title: input.title,
+      note: input.note
+    }))
+    setItems((current) => current.map((item) => item.id === annotationId ? {
+      ...item,
+      title: input.title,
+      note: input.note
+    } : item))
+    setSuccess("批注已更新，正在同步到 QNote")
+  }
+
+  const handleDeleteAnnotation = async (annotationId: string) => {
+    try {
+      await deleteAnnotationFromQNote(annotationId)
+      await deleteAnnotationLocallyById(annotationId)
+      setItems((current) => current.filter((item) => item.id !== annotationId))
+      setSuccess("批注已删除")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "删除批注失败")
+      throw err
     }
   }
 
@@ -609,6 +666,9 @@ export default function SidePanel() {
                 items={items}
                 onStatusChange={handleStatusChange}
                 onCreateTask={(annotationId) => void openTaskDialog(annotationId)}
+                onLocate={displayUrl ? handleLocate : undefined}
+                onUpdate={handleUpdateAnnotation}
+                onDelete={handleDeleteAnnotation}
               />
             )}
           </>
@@ -694,7 +754,22 @@ export default function SidePanel() {
             if (!open) setPending(null)
           }}
           onSubmit={async (form) => {
-            const ann = await getAnnotationById(pending.annotationId)
+            let ann = await getAnnotationById(pending.annotationId)
+            if (!ann) {
+              await upsertAnnotation({
+                id: pending.annotationId,
+                url: pending.url,
+                pageTitle: displayTitle,
+                createdAt: Date.now(),
+                selectedText: pending.selectedText,
+                title: form.title,
+                note: "",
+                mode: pending.mode || "highlight",
+                anchor: { selectedText: pending.selectedText, xpath: "", prefix: "", suffix: "", context: "" },
+                locateStatus: "maybe_lost"
+              })
+              ann = await getAnnotationById(pending.annotationId)
+            }
             await createTaskFromAnnotation({
               annotationId: pending.annotationId,
               task: {
@@ -726,7 +801,7 @@ export default function SidePanel() {
           </div>
           <button
             className="rounded bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500 active:bg-indigo-700 disabled:opacity-60"
-            onClick={() => {
+            onClick={async () => {
               if (!isLoggedIn) {
                 setActiveTab("settings")
                 return

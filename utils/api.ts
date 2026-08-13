@@ -1,8 +1,10 @@
-import { getValidAccessToken, QNOTE_API_BASE_URL, QTABLE_WEB_BASE_URL } from "./auth"
+import { getValidAccessToken, QNOTE_API_BASE_URL, QTABLE_WEB_BASE_URL, refreshAccessToken } from "./auth"
 import {
   applyServerAnnotation,
   applyServerAnnotations,
   getAnnotationById,
+  markAnnotationSyncError,
+  markAnnotationSyncing,
   type AnnotationMode,
   type NsXAnnotation
 } from "./storage"
@@ -119,6 +121,11 @@ async function authenticatedFetch(
   if (options.body && !headers.has("Content-Type") && !(options.body instanceof FormData)) {
     headers.set("Content-Type", "application/json")
   }
+  const response = await fetch(`${QNOTE_API_BASE_URL}${path}`, { ...options, headers })
+  if (response.status !== 401) return response
+  const refreshed = await refreshAccessToken()
+  if (!refreshed) return response
+  headers.set("Authorization", `Bearer ${refreshed}`)
   return await fetch(`${QNOTE_API_BASE_URL}${path}`, { ...options, headers })
 }
 
@@ -177,7 +184,7 @@ const annotationExtra = (annotation: NsXAnnotation) => ({
   locateStatus: annotation.locateStatus
 })
 
-export const syncAnnotationToQNote = async (
+const syncAnnotationToQNoteImpl = async (
   annotation: NsXAnnotation
 ): Promise<NsXAnnotation> => {
   const context = await getSharedContext()
@@ -217,7 +224,6 @@ export const syncAnnotationToQNote = async (
       {
         input: {
           annotationId: annotation.serverId,
-          expectedVersion: annotation.serverVersion,
           type: annotation.mode || "highlight",
           selectedText: annotation.selectedText,
           title: annotation.title || annotation.pageTitle || null,
@@ -264,8 +270,32 @@ export const syncAnnotationToQNote = async (
     syncStatus: "synced",
     syncError: undefined
   }
+  if (!(await getAnnotationById(annotation.id))) {
+    await qnoteGraphQL<{ deleteAnnotation: string }>(
+      `mutation DeleteAnnotation($annotationId: ID!) {
+        deleteAnnotation(annotationId: $annotationId)
+      }`,
+      { annotationId: server.id }
+    ).catch(() => undefined)
+    return synced
+  }
   await applyServerAnnotation(synced)
   return synced
+}
+
+export const syncAnnotationToQNote = async (
+  annotation: NsXAnnotation
+): Promise<NsXAnnotation> => {
+  await markAnnotationSyncing(annotation.id)
+  try {
+    return await syncAnnotationToQNoteImpl(annotation)
+  } catch (error) {
+    await markAnnotationSyncError(
+      annotation.id,
+      error instanceof Error ? error.message : "QNote 同步失败"
+    )
+    throw error
+  }
 }
 
 export const hydrateAnnotationsFromQNote = async (url: string): Promise<void> => {
@@ -304,6 +334,7 @@ export const hydrateAnnotationsFromQNote = async (url: string): Promise<void> =>
       note: item.annotation.comment,
       mode,
       anchor: {
+        selectedText: String(payload.selectedText || item.annotation.selectedText || ""),
         xpath: item.anchor?.xpath || String(payload.xpath || ""),
         prefix: item.anchor?.textPrefix || String(payload.prefix || ""),
         suffix: item.anchor?.textSuffix || String(payload.suffix || ""),
@@ -325,6 +356,24 @@ export const hydrateAnnotationsFromQNote = async (url: string): Promise<void> =>
     }
   })
   await applyServerAnnotations(hydrated)
+}
+
+export const deleteAnnotationFromQNote = async (annotationId: string): Promise<void> => {
+  const local = await getAnnotationById(annotationId)
+  if (!local) return
+  if (local.serverId) {
+    try {
+      await qnoteGraphQL<{ deleteAnnotation: string }>(
+        `mutation DeleteAnnotation($annotationId: ID!) {
+          deleteAnnotation(annotationId: $annotationId)
+        }`,
+        { annotationId: local.serverId }
+      )
+    } catch (error) {
+      if (error instanceof Error && /not found|不存在/i.test(error.message)) return
+      throw error
+    }
+  }
 }
 
 export const getActionOptions = async (): Promise<{ tables: QTable[]; users: QTableUser[] }> => {

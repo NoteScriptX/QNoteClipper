@@ -10,7 +10,7 @@ import {
   type ClipperCreateTaskMessage,
   type ContentToBackgroundMessage
 } from "~utils/messaging"
-import { getAllAnnotations, markAnnotationSyncError, NSX_ANNOTATIONS_KEY, type NsXAnnotation } from "~utils/storage"
+import { getAllAnnotations, getAnnotationById, markAnnotationSyncError, NSX_ANNOTATIONS_KEY, type NsXAnnotation } from "~utils/storage"
 import { getAuthState, loginWithPassword, logout as authLogout, getValidAccessToken } from "~utils/auth"
 import { patchSettings } from "~utils/settings"
 import { createTaskFromAnnotation, getActionOptions, hydrateAnnotationsFromQNote, syncAnnotationToQNote } from "~utils/api"
@@ -39,6 +39,10 @@ const syncPendingAnnotations = async (ids?: string[]) => {
           )
         } finally {
           syncInFlight.delete(annotation.id)
+          const latest = await getAnnotationById(annotation.id)
+          if (latest?.syncStatus === "pending") {
+            setTimeout(() => void syncPendingAnnotations([annotation.id]), 0)
+          }
         }
       })
     )
@@ -77,10 +81,23 @@ const diffAnnotationUrls = (
     const nextTaskId = a.task?.taskId ?? ""
     const prevNote = prev.note ?? ""
     const nextNote = a.note ?? ""
-    if (prevTaskId !== nextTaskId || prevNote !== nextNote) {
+    const annotationChanged =
+      prevNote !== nextNote ||
+      (prev.title ?? "") !== (a.title ?? "") ||
+      prev.selectedText !== a.selectedText ||
+      prev.mode !== a.mode ||
+      (prev.syncStatus !== a.syncStatus && (a.syncStatus === "pending" || a.syncStatus === "error"))
+    if (prev.syncStatus !== a.syncStatus) urls.add(a.url)
+    if (prevTaskId !== nextTaskId || annotationChanged) {
       urls.add(a.url)
       ids.add(a.id)
     }
+  }
+
+  const nextIds = new Set((newValue as NsXAnnotation[]).map((annotation) => annotation.id))
+  for (const previous of oldValue as NsXAnnotation[]) {
+    if (nextIds.has(previous.id)) continue
+    urls.add(previous.url)
   }
 
   return { urls: Array.from(urls), ids: Array.from(ids) }

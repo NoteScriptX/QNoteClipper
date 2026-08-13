@@ -9,6 +9,7 @@ export const QTABLE_WEB_BASE_URL =
 
 const STORAGE_KEYS = {
   ACCESS_TOKEN: "qnote_access_token",
+  REFRESH_TOKEN: "qnote_refresh_token",
   EXPIRES_AT: "qnote_expires_at",
   USER_INFO: "qnote_user_info"
 } as const
@@ -42,9 +43,10 @@ const parseJwtExpMs = (token: string): number | null => {
   }
 }
 
-const storeTokens = async (accessToken: string): Promise<void> => {
+const storeTokens = async (accessToken: string, refreshToken?: string): Promise<void> => {
   await chrome.storage.local.set({
     [STORAGE_KEYS.ACCESS_TOKEN]: accessToken,
+    ...(refreshToken ? { [STORAGE_KEYS.REFRESH_TOKEN]: refreshToken } : {}),
     [STORAGE_KEYS.EXPIRES_AT]: parseJwtExpMs(accessToken) ?? Date.now() + 3_600_000
   })
 }
@@ -87,12 +89,13 @@ export async function loginWithPassword(email: string, password: string): Promis
   }
   const payload = await response.json().catch(() => ({})) as {
     access_token?: string
+    refresh_token?: string
     detail?: string
   }
-  if (!response.ok || !payload.access_token) {
+  if (!response.ok || !payload.access_token || !payload.refresh_token) {
     throw new Error(payload.detail || "账号或密码错误")
   }
-  await storeTokens(payload.access_token)
+  await storeTokens(payload.access_token, payload.refresh_token)
   const user = await fetchUserInfo(payload.access_token)
   if (!user) {
     await clearAuth()
@@ -102,37 +105,73 @@ export async function loginWithPassword(email: string, password: string): Promis
   }
 }
 
+let refreshInFlight: Promise<string | null> | null = null
+
+export async function refreshAccessToken(): Promise<string | null> {
+  if (refreshInFlight) return refreshInFlight
+  const job = (async () => {
+    const storage = await chrome.storage.local.get(STORAGE_KEYS.REFRESH_TOKEN)
+    const refreshToken = storage[STORAGE_KEYS.REFRESH_TOKEN] as string | undefined
+    if (!refreshToken) return null
+    try {
+      const response = await fetch(`${QNOTE_API_BASE_URL}/api/clipper/session/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: refreshToken })
+      })
+      const payload = await response.json().catch(() => ({})) as {
+        access_token?: string
+        refresh_token?: string
+      }
+      if (!response.ok || !payload.access_token || !payload.refresh_token) {
+        if (response.status === 401 || response.status === 403) await clearAuth()
+        return null
+      }
+      await storeTokens(payload.access_token, payload.refresh_token)
+      return payload.access_token
+    } catch {
+      // Keep the refresh token during transient QNote/network outages. The next
+      // alarm or API request can retry without forcing an unnecessary login.
+      return null
+    }
+  })()
+  refreshInFlight = job
+  try {
+    return await job
+  } finally {
+    if (refreshInFlight === job) refreshInFlight = null
+  }
+}
+
 export async function getValidAccessToken(): Promise<string | null> {
   const storage = await chrome.storage.local.get([
     STORAGE_KEYS.ACCESS_TOKEN,
-    STORAGE_KEYS.EXPIRES_AT
+    STORAGE_KEYS.EXPIRES_AT,
+    STORAGE_KEYS.REFRESH_TOKEN
   ])
   const token = storage[STORAGE_KEYS.ACCESS_TOKEN] as string | undefined
   const expiresAt = storage[STORAGE_KEYS.EXPIRES_AT] as number | undefined
-  if (!token || !expiresAt || Date.now() >= expiresAt) {
-    await clearAuth()
-    return null
-  }
+  if (!token || !expiresAt || Date.now() + 5 * 60_000 >= expiresAt) return await refreshAccessToken()
   return token
 }
 
 export async function clearAuth(): Promise<void> {
   await chrome.storage.local.remove([
     STORAGE_KEYS.ACCESS_TOKEN,
+    STORAGE_KEYS.REFRESH_TOKEN,
     STORAGE_KEYS.EXPIRES_AT,
     STORAGE_KEYS.USER_INFO
   ])
 }
 
 export async function getAuthState(): Promise<AuthState> {
+  const validToken = await getValidAccessToken()
   const storage = await chrome.storage.local.get([
     STORAGE_KEYS.ACCESS_TOKEN,
     STORAGE_KEYS.EXPIRES_AT,
     STORAGE_KEYS.USER_INFO
   ])
-  const token = storage[STORAGE_KEYS.ACCESS_TOKEN] as string | undefined
-  const expiresAt = storage[STORAGE_KEYS.EXPIRES_AT] as number | undefined
-  const isAuthenticated = Boolean(token && expiresAt && Date.now() < expiresAt)
+  const isAuthenticated = Boolean(validToken)
   return {
     isAuthenticated,
     isLoading: false,

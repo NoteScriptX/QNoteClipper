@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnnotationCard } from "~components/AnnotationCard";
 import { Bubble } from "~components/Bubble";
 import { createFingerprintFromRange, createFingerprintFromSelection, getMergedClientRects, locateRangeFromFingerprint } from "~utils/anchor";
-import { CLIPPER_CAPTURE_ANNOTATION_IMAGE, CONTENT_ACTIVATE_DRAW_MODE, CONTENT_OPEN_SELECTION_CARD, requestFromBackground, STORAGE_UPDATED } from "~utils/messaging";
+import { CLIPPER_CAPTURE_ANNOTATION_IMAGE, CONTENT_ACTIVATE_DRAW_MODE, CONTENT_LOCATE_ANNOTATION, CONTENT_OPEN_SELECTION_CARD, requestFromBackground, STORAGE_UPDATED } from "~utils/messaging";
 import { getAnnotationsByUrl, normalizePageUrl, NSX_ANNOTATIONS_KEY, upsertAnnotation, type AnnotationMode, type NsXAnnotation } from "~utils/storage";
 
 
@@ -230,6 +230,7 @@ export default function Content() {
   const boxStartRef = useRef<{ x: number; y: number } | null>(null)
   const linePointsRef = useRef<{ x: number; y: number }[] | null>(null)
   const traceHandledRef = useRef(false)
+  const locateRequestRef = useRef<string | null>(null)
 
   const url = useMemo(() => normalizePageUrl(window.location.href), [])
   const traceAnnotationId = useMemo(() => {
@@ -250,17 +251,26 @@ export default function Content() {
       const annotations = await getAnnotationsByUrl(url)
       const next: HighlightRect[] = []
       for (const a of annotations) {
-        const located = a.mode === "line" || a.mode === "box" ? locateRangeFromFingerprint({
-          selectedText: a.selectedText,
+        const located = locateRangeFromFingerprint({
+          selectedText: a.anchor.selectedText || a.selectedText,
           xpath: a.anchor.xpath,
           prefix: a.anchor.prefix,
           suffix: a.anchor.suffix,
           context: a.anchor.context
-        }) : null
+        })
         const currentAnchor = located?.range ? getDocumentBounds(located.range) : null
-        if (!traceHandledRef.current && traceAnnotationId && a.serverId === traceAnnotationId && located?.range) {
-          located.range.startContainer.parentElement?.scrollIntoView({ behavior: "smooth", block: "center" })
+        const requestedId = locateRequestRef.current || traceAnnotationId
+        if (
+          requestedId &&
+          (a.id === requestedId || a.serverId === requestedId) &&
+          (!traceHandledRef.current || locateRequestRef.current)
+        ) {
+          const target = located.range?.startContainer.parentElement
+          if (target) target.scrollIntoView({ behavior: "smooth", block: "center" })
+          else if (a.box) window.scrollTo({ top: Math.max(0, a.box.top - window.innerHeight / 2), behavior: "smooth" })
+          else if (a.line?.length) window.scrollTo({ top: Math.max(0, a.line[0].y - window.innerHeight / 2), behavior: "smooth" })
           traceHandledRef.current = true
+          locateRequestRef.current = null
         }
         if (a.mode === "line" && a.line?.length) {
           const line = a.shapeAnchor && currentAnchor
@@ -276,21 +286,14 @@ export default function Content() {
           next.push({ id: a.id, rects: [], status: located?.status || "ok", mode: "box", box })
           continue
         }
-        const textLocated = locateRangeFromFingerprint({
-          selectedText: a.selectedText,
-          xpath: a.anchor.xpath,
-          prefix: a.anchor.prefix,
-          suffix: a.anchor.suffix,
-          context: a.anchor.context
-        })
-        if (!textLocated.range) {
-          next.push({ id: a.id, rects: [], status: textLocated.status, mode: a.mode === "underline" ? "underline" : "highlight" })
+        if (!located.range) {
+          next.push({ id: a.id, rects: [], status: located.status, mode: a.mode === "underline" ? "underline" : "highlight" })
           continue
         }
         next.push({
           id: a.id,
-          rects: getMergedClientRects(textLocated.range),
-          status: textLocated.status,
+          rects: getMergedClientRects(located.range),
+          status: located.status,
           mode: a.mode === "underline" ? "underline" : "highlight"
         })
       }
@@ -315,6 +318,24 @@ export default function Content() {
     chrome.runtime.onMessage.addListener(listener)
     return () => chrome.runtime.onMessage.removeListener(listener)
   }, [refreshHighlights, url])
+
+  useEffect(() => {
+    let timer: number | null = null
+    const observer = new MutationObserver(() => {
+      if (timer != null) window.clearTimeout(timer)
+      timer = window.setTimeout(() => {
+        timer = null
+        void refreshHighlights()
+      }, 250)
+    })
+    if (document.body) {
+      observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+    }
+    return () => {
+      observer.disconnect()
+      if (timer != null) window.clearTimeout(timer)
+    }
+  }, [refreshHighlights])
 
   useEffect(() => {
     const isInCsui = (e: MouseEvent) => {
@@ -513,6 +534,7 @@ export default function Content() {
       createdAt: Date.now(),
       selectedText: fp.selectedText,
       anchor: {
+        selectedText: fp.selectedText,
         xpath: fp.xpath,
         prefix: fp.prefix,
         suffix: fp.suffix,
@@ -533,7 +555,7 @@ export default function Content() {
   }, [bubble, url])
 
   useEffect(() => {
-    const listener = (message: { type?: string; mode?: "line" | "box" }) => {
+    const listener = (message: { type?: string; mode?: "line" | "box"; annotationId?: string }) => {
       if (message.type === CONTENT_OPEN_SELECTION_CARD) {
         void onBubbleClick()
         return
@@ -544,11 +566,17 @@ export default function Content() {
         window.getSelection()?.removeAllRanges()
         drawModeRef.current = message.mode
         document.documentElement.style.cursor = message.mode === "line" ? "crosshair" : "cell"
+        return
+      }
+      if (message.type === CONTENT_LOCATE_ANNOTATION && message.annotationId) {
+        traceHandledRef.current = false
+        locateRequestRef.current = message.annotationId
+        void refreshHighlights()
       }
     }
     chrome.runtime.onMessage.addListener(listener)
     return () => chrome.runtime.onMessage.removeListener(listener)
-  }, [onBubbleClick])
+  }, [onBubbleClick, refreshHighlights])
 
   useEffect(() => {
     const cancelDrawing = (event: KeyboardEvent) => {

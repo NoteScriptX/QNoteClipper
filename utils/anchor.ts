@@ -74,16 +74,26 @@ export const elementByXPath = (xpath: string): Element | null => {
 export const createFingerprintFromRange = (
   range: Range
 ): TextAnchorFingerprint | null => {
-  const selectedText = range.toString().trim()
+  const rawSelectedText = range.toString()
+  const selectedText = rawSelectedText.trim()
   if (!selectedText) return null
 
   const baseEl =
-    getClosestElement(range.startContainer) ??
-    getClosestElement(range.commonAncestorContainer)
+    getClosestElement(range.commonAncestorContainer) ??
+    getClosestElement(range.startContainer)
   if (!baseEl) return null
 
   const containerText = baseEl.textContent ?? ""
-  const idx = containerText.indexOf(selectedText)
+  let idx = containerText.indexOf(selectedText)
+  try {
+    const before = document.createRange()
+    before.selectNodeContents(baseEl)
+    before.setEnd(range.startContainer, range.startOffset)
+    idx = before.toString().length + rawSelectedText.indexOf(selectedText)
+  } catch {
+    // The quote/context fallback below remains usable if the DOM changed
+    // between the selection event and fingerprint creation.
+  }
   const ctx = safeSliceAround(
     containerText,
     idx >= 0 ? idx : 0,
@@ -131,27 +141,46 @@ const findBestInElement = (
   fp: TextAnchorFingerprint
 ): LocatedText | null => {
   const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+  const nodes: { node: Text; start: number; end: number }[] = []
+  let full = ""
+  while (walker.nextNode()) {
+    const node = walker.currentNode as Text
+    if (node.parentElement?.closest("script,style,noscript,#nsx-clipper-csui")) continue
+    const value = node.nodeValue ?? ""
+    if (!value) continue
+    const start = full.length
+    full += value
+    nodes.push({ node, start, end: full.length })
+  }
+
+  const boundary = (offset: number, endBoundary: boolean) => {
+    const entry = nodes.find((item) =>
+      endBoundary ? offset > item.start && offset <= item.end : offset >= item.start && offset < item.end
+    )
+    if (!entry) return null
+    return { node: entry.node, offset: Math.max(0, Math.min(entry.node.length, offset - entry.start)) }
+  }
+
   let best: LocatedText | null = null
   const target = fp.selectedText
-  while (walker.nextNode()) {
-    const n = walker.currentNode as Text
-    const text = n.nodeValue ?? ""
-    if (!text) continue
-    let from = 0
-    while (true) {
-      const idx = text.indexOf(target, from)
-      if (idx < 0) break
-      const start = idx
-      const end = idx + target.length
-      const score = scoreMatch(text, start, end, fp)
+  if (!target || !nodes.length) return null
+  let from = 0
+  while (true) {
+    const idx = full.indexOf(target, from)
+    if (idx < 0) break
+    const end = idx + target.length
+    const startPoint = boundary(idx, false)
+    const endPoint = boundary(end, true)
+    if (startPoint && endPoint) {
+      const score = scoreMatch(full, idx, end, fp)
       if (!best || score > best.score) {
         const range = document.createRange()
-        range.setStart(n, idx)
-        range.setEnd(n, idx + target.length)
+        range.setStart(startPoint.node, startPoint.offset)
+        range.setEnd(endPoint.node, endPoint.offset)
         best = { range, score }
       }
-      from = idx + target.length
     }
+    from = idx + Math.max(1, target.length)
   }
   return best
 }

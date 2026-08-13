@@ -33,6 +33,7 @@ export function AnnotationCard({
   const [note, setNote] = useState(initialNote ?? "")
   const [isSaving, setIsSaving] = useState(false)
   const [savedFlash, setSavedFlash] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   const excerpt = useMemo(() => {
     const t = selectedText.trim()
@@ -91,37 +92,46 @@ export function AnnotationCard({
               if (!e.ctrlKey) return
               if (e.key !== "Enter") return
               e.preventDefault()
-              if (isSaving || !note.trim()) return
+              if (isSaving) return
               setIsSaving(true)
-              Promise.resolve(onSave({ title: note.trim(), note: note.trim() }))
+              setSaveError(null)
+              const title = note.trim() || excerpt || pageTitle || "网页批注"
+              Promise.resolve(onSave({ title, note: note.trim() }))
                 .then(() => {
                   setSavedFlash(true)
                   setTimeout(() => onClose(), 260)
                 })
+                .catch((error) => setSaveError(error instanceof Error ? error.message : "保存失败，请重试"))
                 .finally(() => {
                   setTimeout(() => setIsSaving(false), 260)
                 })
             }}
-            placeholder="批注内容（必填，也可作为行动标题）"
+            placeholder="补充批注内容（可选）"
             value={note}
           />
           <div className="mt-1.5 text-[11px] text-slate-400">
-            提示：按 Ctrl + Enter 可快速保存
+            可直接保存高亮；按 Ctrl + Enter 可快速保存
           </div>
         </div>
+
+        {saveError ? <div className="mt-2 rounded bg-rose-50 px-2.5 py-2 text-xs text-rose-700">{saveError}</div> : null}
 
         {hasScreenshot ? <div className="mt-2 text-xs text-slate-500">已附上当前绘制区域截图，QNote 会保存截图并在行动中保留来源引用。</div> : null}
 
         <div className="mt-3.5">
           <button
             className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50 active:bg-slate-100 disabled:opacity-60"
-            disabled={isSaving || !note.trim()}
+            disabled={isSaving}
             onClick={async () => {
               setIsSaving(true)
+              setSaveError(null)
               try {
-                await onSave({ title: note.trim(), note: note.trim() })
+                const title = note.trim() || excerpt || pageTitle || "网页批注"
+                await onSave({ title, note: note.trim() })
                 setSavedFlash(true)
                 setTimeout(() => onClose(), 260)
+              } catch (error) {
+                setSaveError(error instanceof Error ? error.message : "保存失败，请重试")
               } finally {
                 setTimeout(() => setIsSaving(false), 260)
               }
