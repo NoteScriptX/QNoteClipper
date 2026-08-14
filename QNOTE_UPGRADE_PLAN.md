@@ -55,6 +55,21 @@
 **已知问题**：
 - `utils/settings.ts` 的 `annotationMode` 字段目前是死代码（未被任何 UI/逻辑消费），属遗留 cruft，暂不清理以避免无关改动。
 
+### Bug Fix（2026-08-14）：创建第一条批注后侧栏不刷新
+
+- **现象**：侧栏保持打开时，创建第一条批注后列表看不到；第二条起恢复正常。
+- **根因**：`background.ts` 的 `diffAnnotationUrls` 在 `oldValue` 非数组（storage 键从 `undefined` → 数组）时直接 `return { urls: [], ids: [] }`，导致广播 `STORAGE_UPDATED` 的 `urls` 为空；`sidepanel.tsx` 监听器 `if (!p.urls?.length) return` 将空 `urls` 丢弃，不触发 `refresh()`。
+- **修复**：将"非数组"归一化为空数组（`oldArr` / `newArr`），仅在两者皆空时返回空；使"无 → 有"正确计入 `urls`/`ids`，同步触发侧栏刷新与首条批注的即时 `syncPendingAnnotations`。
+
+### Bug Fix（2026-08-14，二次）：本地批注因登录状态被清空
+
+- **现象**：创建批注后（本地已落盘 `chrome.storage.local`），侧栏批注列表仍看不到。
+- **根因（主）**：`sidepanel.tsx` 的 `refresh()` 中，只要 `!authState.isAuthenticated`（未登录 / token 过期且 QNote 刷新失败 / QNote 不可达），就执行 `setItems([])` 清空列表并 `setActiveTab("settings")` 强制切到设置页。而 `content.tsx` 的 `saveDraft` 不检查登录、直接 `upsertAnnotation` 写本地。二者冲突 → 批注落盘了却被 UI 隐藏，直接违反 Local First 原则。
+- **修复**：将"认证状态"与"本地批注展示"解耦。`refresh()` 中：
+  - 已登录：原样走 `hydrateAnnotationsFromQNote` + 更新用户信息。
+  - 未登录：仅 `setSettings(loggedIn:false)` + `setQtables([])`，**不再 `setItems([])`、不再 `setActiveTab("settings")`、不再提前 `return`**，继续执行 `getAllAnnotations()` 渲染本地批注。
+  - 登录状态现在只影响"同步 / 创建行动"能力，不影响本地数据可见性。
+
 ---
 
 ## Phase 2 — Organize

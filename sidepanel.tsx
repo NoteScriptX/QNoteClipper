@@ -107,42 +107,42 @@ export default function SidePanel() {
       if (forceCurrent) setSelectedPageUrl(null)
 
       const st = await getSettings()
-      if (!authState.isAuthenticated) {
+
+      // Local-first：无论是否登录都展示本地批注。登录状态只影响“同步”与
+      // “创建行动”能力，绝不能在未登录时清空用户已经捕获的本地数据。
+      if (authState.isAuthenticated) {
+        setSettings((current) => {
+          const next = {
+            ...st,
+            loggedIn: true,
+            userEmail: authState.user?.email ?? st.userEmail,
+            userName: authState.user?.name ?? st.userName,
+            userAvatar: authState.user?.avatar_url ?? st.userAvatar
+          }
+          return current &&
+            current.loggedIn === next.loggedIn &&
+            current.userEmail === next.userEmail &&
+            current.userName === next.userName &&
+            current.userAvatar === next.userAvatar
+            ? current
+            : next
+        })
+
+        // Pull the authoritative server copy before rendering. QNote outages do
+        // not block access to the extension's offline cache.
+        try {
+          if (info.url) await hydrateAnnotationsFromQNote(info.url)
+          if (selectedPageUrl && selectedPageUrl !== info.url) {
+            await hydrateAnnotationsFromQNote(selectedPageUrl)
+          }
+        } catch {
+          // Offline-first: pending local captures remain available and will sync
+          // automatically when the service is reachable again.
+        }
+      } else {
         setSettings({ ...st, loggedIn: false })
         setQtables([])
-        setItems([])
-        setActiveTab("settings")
-        return
       }
-
-      // Pull the authoritative server copy before rendering. QNote outages do
-      // not block access to the extension's offline cache.
-      try {
-        if (info.url) await hydrateAnnotationsFromQNote(info.url)
-        if (selectedPageUrl && selectedPageUrl !== info.url) {
-          await hydrateAnnotationsFromQNote(selectedPageUrl)
-        }
-      } catch {
-        // Offline-first: pending local captures remain available and will sync
-        // automatically when the service is reachable again.
-      }
-
-      setSettings((current) => {
-        const next = {
-          ...st,
-          loggedIn: true,
-          userEmail: authState.user?.email ?? st.userEmail,
-          userName: authState.user?.name ?? st.userName,
-          userAvatar: authState.user?.avatar_url ?? st.userAvatar
-        }
-        return current &&
-          current.loggedIn === next.loggedIn &&
-          current.userEmail === next.userEmail &&
-          current.userName === next.userName &&
-          current.userAvatar === next.userAvatar
-          ? current
-          : next
-      })
 
       const allAnnotations = await getAllAnnotations()
       const choices = new Map<string, PageChoice>()

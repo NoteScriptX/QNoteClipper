@@ -60,17 +60,19 @@ const diffAnnotationUrls = (
   oldValue: unknown,
   newValue: unknown
 ): { urls: string[]; ids: string[] } => {
-  if (!Array.isArray(oldValue) || !Array.isArray(newValue)) {
+  const oldArr = Array.isArray(oldValue) ? (oldValue as NsXAnnotation[]) : []
+  const newArr = Array.isArray(newValue) ? (newValue as NsXAnnotation[]) : []
+  if (!oldArr.length && !newArr.length) {
     return { urls: [], ids: [] }
   }
 
   const oldMap = new Map<string, NsXAnnotation>()
-  for (const a of oldValue as NsXAnnotation[]) oldMap.set(a.id, a)
+  for (const a of oldArr) oldMap.set(a.id, a)
 
   const urls = new Set<string>()
   const ids = new Set<string>()
 
-  for (const a of newValue as NsXAnnotation[]) {
+  for (const a of newArr) {
     const prev = oldMap.get(a.id)
     if (!prev) {
       urls.add(a.url)
@@ -94,8 +96,8 @@ const diffAnnotationUrls = (
     }
   }
 
-  const nextIds = new Set((newValue as NsXAnnotation[]).map((annotation) => annotation.id))
-  for (const previous of oldValue as NsXAnnotation[]) {
+  const nextIds = new Set(newArr.map((annotation) => annotation.id))
+  for (const previous of oldArr) {
     if (nextIds.has(previous.id)) continue
     urls.add(previous.url)
   }
