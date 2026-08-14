@@ -27,6 +27,7 @@ export type AnnotationPreview = {
   pageTitle?: string
   syncStatus?: "pending" | "syncing" | "synced" | "error"
   syncError?: string
+  authorName?: string
 }
 
 type Props = {
@@ -39,6 +40,7 @@ type Props = {
     input: { title: string; note: string }
   ) => Promise<void> | void
   onDelete?: (annotationId: string) => Promise<void> | void
+  readOnly?: boolean
 }
 
 const excerpt = (text: string) => {
@@ -74,7 +76,8 @@ export function AnnotationList({
   onStatusChange,
   onLocate,
   onUpdate,
-  onDelete
+  onDelete,
+  readOnly = false
 }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
 
@@ -113,6 +116,7 @@ export function AnnotationList({
           onStatusChange={onStatusChange}
           onUpdate={onUpdate}
           onDelete={onDelete}
+          readOnly={readOnly}
         />
       ))}
     </div>
@@ -125,6 +129,7 @@ function AnnotationListItem({
   onStatusChange,
   onUpdate,
   onDelete,
+  readOnly,
   selected,
   onSelect
 }: {
@@ -138,6 +143,7 @@ function AnnotationListItem({
     input: { title: string; note: string }
   ) => Promise<void> | void
   onDelete?: (annotationId: string) => Promise<void> | void
+  readOnly: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(false)
@@ -312,6 +318,7 @@ function AnnotationListItem({
               </div>
             )}
             <div className="mt-2 text-xs text-slate-400">
+              {it.authorName ? `创建者：${it.authorName} · ` : ""}
               类型：
               {it.mode === "line"
                 ? "手绘划线"
@@ -350,13 +357,14 @@ function AnnotationListItem({
                   type="button">
                   定位原文
                 </button>
-                <button
-                  className="rounded px-2 py-1 text-xs text-slate-600 hover:bg-slate-100"
-                  onClick={() => setEditing(true)}
-                  type="button">
-                  编辑
-                </button>
-                <Popconfirm
+                {!readOnly ? <>
+                  <button
+                    className="rounded px-2 py-1 text-xs text-slate-600 hover:bg-slate-100"
+                    onClick={() => setEditing(true)}
+                    type="button">
+                    编辑
+                  </button>
+                  <Popconfirm
                   cancelText="取消"
                   description="已创建的 QTable 行动会保留。"
                   okText="删除"
@@ -378,7 +386,8 @@ function AnnotationListItem({
                     type="button">
                     删除
                   </button>
-                </Popconfirm>
+                  </Popconfirm>
+                </> : null}
               </div>
             </div>
 
@@ -398,7 +407,7 @@ function AnnotationListItem({
                     已创建任务
                   </span>
                 )
-              ) : (
+              ) : !readOnly ? (
                 <button
                   className="shrink-0 rounded bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-indigo-500 active:bg-indigo-700"
                   onClick={(e) => {
@@ -408,6 +417,8 @@ function AnnotationListItem({
                   type="button">
                   创建任务
                 </button>
+              ) : (
+                <span className="text-xs text-slate-400">只读工作区</span>
               )}
             </div>
           </div>

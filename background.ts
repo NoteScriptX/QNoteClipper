@@ -12,8 +12,8 @@ import {
 } from "~utils/messaging"
 import { getAllAnnotations, getAnnotationById, markAnnotationSyncError, NSX_ANNOTATIONS_KEY, type NsXAnnotation } from "~utils/storage"
 import { getAuthState, loginWithPassword, logout as authLogout, getValidAccessToken } from "~utils/auth"
-import { patchSettings } from "~utils/settings"
-import { createTaskFromAnnotation, getActionOptions, hydrateAnnotationsFromQNote, syncAnnotationToQNote } from "~utils/api"
+import { getSettings, patchSettings } from "~utils/settings"
+import { clearSharedContextCache, createTaskFromAnnotation, getActionOptions, getSharedContext, hydrateAnnotationsFromQNote, syncAnnotationToQNote } from "~utils/api"
 
 const syncInFlight = new Set<string>()
 
@@ -198,7 +198,8 @@ chrome.runtime.onMessage.addListener(
     if (message.type === CLIPPER_GET_TASK_OPTIONS) {
       ;(async () => {
         try {
-          sendResponse({ ok: true, ...(await getActionOptions()) })
+          const settings = await getSettings()
+          sendResponse({ ok: true, ...(await getActionOptions(settings.selectedWorkspaceId)) })
         } catch (error) {
           sendResponse({ ok: false, error: error instanceof Error ? error.message : "加载行动选项失败" })
         }
@@ -234,14 +235,22 @@ chrome.runtime.onMessage.addListener(
         try {
           if (!message.email || !message.password) throw new Error("请输入 QNote 邮箱和密码")
           await loginWithPassword(message.email, message.password)
+          clearSharedContextCache()
           // After successful login, update settings with user info
           const authState = await getAuthState()
           if (authState.isAuthenticated && authState.user) {
+            const context = await getSharedContext(true)
+            const settings = await getSettings()
+            const workspace = context.workspaces.find((item) => item.id === settings.selectedWorkspaceId)
+              || context.workspaces.find((item) => item.id === context.default_workspace_id)
+              || context.workspaces[0]
             await patchSettings({
               loggedIn: true,
               userEmail: authState.user.email,
               userName: authState.user.name,
-              userAvatar: authState.user.avatar_url
+              userAvatar: authState.user.avatar_url,
+              selectedWorkspaceId: workspace?.id,
+              selectedWorkspaceRole: workspace?.role === "viewer" ? "viewer" : workspace?.role === "owner" ? "owner" : workspace ? "editor" : undefined
             })
           }
           await syncPendingAnnotations()
@@ -265,6 +274,7 @@ chrome.runtime.onMessage.addListener(
       ;(async () => {
         try {
           await authLogout()
+          clearSharedContextCache()
           await patchSettings({
             loggedIn: false,
             userEmail: undefined,

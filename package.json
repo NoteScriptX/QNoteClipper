@@ -1,7 +1,7 @@
 {
   "name": "note-script-clipper",
   "displayName": "NoteScript Clipper",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "NoteScript browser clipper (MVP).",
   "author": "Evan Zhao",
   "scripts": {

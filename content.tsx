@@ -9,6 +9,7 @@ import { Bubble } from "~components/Bubble";
 import { createFingerprintFromRange, createFingerprintFromSelection, getMergedClientRects, locateRangeFromFingerprint, type TextAnchorFingerprint } from "~utils/anchor";
 import { CLIPPER_CAPTURE_ANNOTATION_IMAGE, CONTENT_ACTIVATE_DRAW_MODE, CONTENT_LOCATE_ANNOTATION, CONTENT_OPEN_SELECTION_CARD, CONTENT_REMOVE_ANNOTATION_OVERLAY, requestFromBackground, STORAGE_UPDATED } from "~utils/messaging";
 import { getAnnotationById, getAnnotationsByUrl, normalizePageUrl, NSX_ANNOTATIONS_KEY, upsertAnnotation, type AnnotationMode, type NsXAnnotation } from "~utils/storage";
+import { getSettings } from "~utils/settings";
 
 
 
@@ -622,6 +623,10 @@ export default function Content() {
 
   const saveDraft = useCallback(
     async (draft: DraftAnnotation, input: { title: string; note: string }) => {
+      const settings = await getSettings()
+      if (settings.loggedIn && settings.selectedWorkspaceRole === "viewer") {
+        throw new Error("当前团队工作区为只读，不能创建批注")
+      }
       const annotation: NsXAnnotation = {
         id: draft.id,
         url: draft.url,
@@ -636,7 +641,8 @@ export default function Content() {
         shapeAnchor: draft.shapeAnchor,
         screenshotDataUrl: draft.screenshotDataUrl,
         anchor: draft.anchor,
-        locateStatus: draft.locateStatus
+        locateStatus: draft.locateStatus,
+        workspaceId: settings.selectedWorkspaceId
       }
       await upsertAnnotation(annotation)
 

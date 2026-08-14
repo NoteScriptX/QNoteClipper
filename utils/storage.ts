@@ -47,6 +47,7 @@ export type NsXAnnotation = {
   }
   locateStatus?: "ok" | "maybe_lost"
   serverId?: string
+  userId?: number
   serverVersion?: number
   workspaceId?: string
   assetId?: string
@@ -122,6 +123,7 @@ const serializeAnnotation = (annotation: NsXAnnotation): NsXAnnotation => ({
   },
   locateStatus: annotation.locateStatus === "maybe_lost" ? "maybe_lost" : "ok",
   serverId: optionalString(annotation.serverId),
+  userId: finiteNumber(annotation.userId, 0) || undefined,
   serverVersion: finiteNumber(annotation.serverVersion, 0) || undefined,
   workspaceId: optionalString(annotation.workspaceId),
   assetId: optionalString(annotation.assetId),
@@ -260,6 +262,7 @@ const mergeServerAnnotation = (
       ...incoming,
       ...current,
       serverId: incoming.serverId || current.serverId,
+      userId: incoming.userId || current.userId,
       serverVersion: incoming.serverVersion || current.serverVersion,
       workspaceId: incoming.workspaceId || current.workspaceId,
       assetId: incoming.assetId || current.assetId,

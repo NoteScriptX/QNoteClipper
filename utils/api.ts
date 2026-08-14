@@ -13,7 +13,12 @@ export { QNOTE_API_BASE_URL }
 
 export type SharedContext = {
   user: { id: number; name: string; email: string }
-  workspaces: { id: string; name?: string; role: string }[]
+  workspaces: {
+    id: string
+    name?: string
+    role: "owner" | "editor" | "viewer" | string
+    members?: { id: number; name: string; email: string; role: string }[]
+  }[]
   default_workspace_id?: string
 }
 
@@ -22,6 +27,7 @@ export type QTable = {
   name: string
   emoji?: string
   row_count: number
+  workspace_id?: string
 }
 
 export type QTableUser = {
@@ -74,6 +80,7 @@ type PageAnnotationContext = {
   annotation: {
     id: string
     clientId?: string
+    userId?: number
     type: string
     selectedText?: string
     title?: string
@@ -149,14 +156,18 @@ const qnoteGraphQL = async <T>(
   return payload.data
 }
 
-export const getSharedContext = async (): Promise<SharedContext> => {
-  if (contextCache && contextCache.expiresAt > Date.now()) return contextCache.value
+export const getSharedContext = async (force = false): Promise<SharedContext> => {
+  if (!force && contextCache && contextCache.expiresAt > Date.now()) return contextCache.value
   const response = await authenticatedFetch("/api/clipper/context")
   const payload = await response.json().catch(() => ({}))
   if (!response.ok) throw new Error(messageFromPayload(payload, "无法读取 QNote 工作区"))
   const value = payload as SharedContext
   contextCache = { value, expiresAt: Date.now() + 60_000 }
   return value
+}
+
+export const clearSharedContextCache = () => {
+  contextCache = null
 }
 
 const uploadScreenshot = async (
@@ -188,8 +199,13 @@ const syncAnnotationToQNoteImpl = async (
   annotation: NsXAnnotation
 ): Promise<NsXAnnotation> => {
   const context = await getSharedContext()
-  const workspaceId = annotation.workspaceId || context.default_workspace_id || context.workspaces[0]?.id
+  const { getSettings } = await import("./settings")
+  const settings = await getSettings()
+  const workspaceId = annotation.workspaceId || settings.selectedWorkspaceId || context.default_workspace_id || context.workspaces[0]?.id
   if (!workspaceId) throw new Error("当前账号没有可用 QNote 工作区")
+  const workspace = context.workspaces.find((item) => item.id === workspaceId)
+  if (!workspace) throw new Error("所选工作区已不可用，请刷新后重试")
+  if (workspace.role === "viewer") throw new Error("当前工作区为只读，无法创建或修改批注")
 
   const sourceData = await qnoteGraphQL<{ upsertWebSource: { id: string } }>(
     `mutation UpsertSource($input: UpsertWebSourceInput!) {
@@ -230,7 +246,8 @@ const syncAnnotationToQNoteImpl = async (
           comment: annotation.note || null,
           assetId: assetId || null,
           anchor,
-          extra: annotationExtra(annotation)
+          extra: annotationExtra(annotation),
+          workspaceId
         }
       }
     )
@@ -298,14 +315,19 @@ export const syncAnnotationToQNote = async (
   }
 }
 
-export const hydrateAnnotationsFromQNote = async (url: string): Promise<void> => {
+export const hydrateAnnotationsFromQNote = async (
+  url: string,
+  preferredWorkspaceId?: string
+): Promise<void> => {
   const context = await getSharedContext()
-  const workspaceId = context.default_workspace_id || context.workspaces[0]?.id
+  const { getSettings } = await import("./settings")
+  const settings = await getSettings()
+  const workspaceId = preferredWorkspaceId || settings.selectedWorkspaceId || context.default_workspace_id || context.workspaces[0]?.id
   if (!workspaceId || !url) return
   const data = await qnoteGraphQL<{ pageAnnotations: PageAnnotationContext[] }>(
     `query PageAnnotations($url: String!, $workspaceId: String!) {
       pageAnnotations(url: $url, workspaceId: $workspaceId) {
-        annotation { id clientId type selectedText title comment version createdAt extra assetId }
+        annotation { id clientId userId type selectedText title comment version createdAt extra assetId }
         source { url title workspaceId }
         anchor { xpath textPrefix textSuffix contextText locateStatus anchorPayload }
         relations { qtableTaskId qtableTableId qtableRecordId }
@@ -323,6 +345,7 @@ export const hydrateAnnotationsFromQNote = async (url: string): Promise<void> =>
     return {
       id: item.annotation.clientId || item.annotation.id,
       serverId: item.annotation.id,
+      userId: item.annotation.userId,
       serverVersion: item.annotation.version,
       workspaceId: item.source.workspaceId,
       assetId: item.annotation.assetId,
@@ -360,17 +383,18 @@ export const hydrateAnnotationsFromQNote = async (url: string): Promise<void> =>
 
 export const deleteAnnotationFromQNote = async (
   annotationId: string,
-  knownServerId?: string
+  knownServerId?: string,
+  workspaceId?: string
 ): Promise<void> => {
   const local = await getAnnotationById(annotationId)
   const serverId = knownServerId || local?.serverId
   if (serverId) {
     try {
       await qnoteGraphQL<{ deleteAnnotation: string }>(
-        `mutation DeleteAnnotation($annotationId: ID!) {
-          deleteAnnotation(annotationId: $annotationId)
-        }`,
-        { annotationId: serverId }
+      `mutation DeleteAnnotation($annotationId: ID!, $workspaceId: String) {
+        deleteAnnotation(annotationId: $annotationId, workspaceId: $workspaceId)
+      }`,
+      { annotationId: serverId, workspaceId: workspaceId || local?.workspaceId || null }
       )
     } catch (error) {
       if (error instanceof Error && /not found|不存在/i.test(error.message)) return
@@ -379,8 +403,11 @@ export const deleteAnnotationFromQNote = async (
   }
 }
 
-export const getActionOptions = async (): Promise<{ tables: QTable[]; users: QTableUser[] }> => {
-  const response = await authenticatedFetch("/api/clipper/action-options")
+export const getActionOptions = async (
+  workspaceId?: string
+): Promise<{ tables: QTable[]; users: QTableUser[] }> => {
+  const query = workspaceId ? `?workspace_id=${encodeURIComponent(workspaceId)}` : ""
+  const response = await authenticatedFetch(`/api/clipper/action-options${query}`)
   const payload = await response.json().catch(() => ({}))
   if (!response.ok) throw new Error(messageFromPayload(payload, "无法加载行动选项"))
   return payload as { tables: QTable[]; users: QTableUser[] }

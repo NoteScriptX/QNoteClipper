@@ -5,6 +5,8 @@ export type NsXSettings = {
   userEmail?: string
   userName?: string
   userAvatar?: string
+  selectedWorkspaceId?: string
+  selectedWorkspaceRole?: "owner" | "editor" | "viewer"
   annotationMode: "highlight" | "line" | "box"
 }
 
@@ -16,6 +18,8 @@ export const getSettings = async (): Promise<NsXSettings> => {
     userEmail: undefined,
     userName: undefined,
     userAvatar: undefined,
+    selectedWorkspaceId: undefined,
+    selectedWorkspaceRole: undefined,
     annotationMode: "highlight"
   }
   if (!raw || typeof raw !== "object") return base
@@ -25,6 +29,10 @@ export const getSettings = async (): Promise<NsXSettings> => {
     userEmail: typeof r.userEmail === "string" ? r.userEmail : base.userEmail,
     userName: typeof r.userName === "string" ? r.userName : base.userName,
     userAvatar: typeof r.userAvatar === "string" ? r.userAvatar : base.userAvatar,
+    selectedWorkspaceId: typeof r.selectedWorkspaceId === "string" ? r.selectedWorkspaceId : undefined,
+    selectedWorkspaceRole: ["owner", "editor", "viewer"].includes(r.selectedWorkspaceRole as string)
+      ? r.selectedWorkspaceRole as NsXSettings["selectedWorkspaceRole"]
+      : undefined,
     annotationMode:
       (r.annotationMode as string) === "line" || (r.annotationMode as string) === "underline"
         ? "line"

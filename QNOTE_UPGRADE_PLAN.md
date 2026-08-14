@@ -5,6 +5,8 @@
 
 ## 技术栈
 
+**内部试用版本**: `0.1.0`
+
 | 维度 | 现状 |
 |------|------|
 | 构建 | Plasmo v0.90.5（chrome-mv3） |
@@ -107,6 +109,26 @@
 - [ ] OAuth 消息类型收口为 Typed Protocol（`background.ts` 中 `OAUTH_*`、`AUTH_STATE_CHANGED`、`AUTH_ERROR` 仍为裸字符串，属渐进迁移项）
 
 **Files**: `utils/messaging.ts`、`background.ts`、`sidepanel.tsx`
+
+---
+
+## Phase 4.5 — 团队协作闭环（2026-08-14）
+
+- [x] 以 QTable 工作区成员关系为唯一权威；QNote 只维护可失效的本地投影
+- [x] 工作区切换：侧栏可切换团队空间，页面批注、目标表和负责人同步按空间过滤
+- [x] 团队可见：同一工作区成员恢复并定位彼此的网页批注，同时显示创建者
+- [x] 角色闭环：owner/editor 可写；viewer 在 UI 和 QNoteServer/QTable 两层均只读
+- [x] 任务闭环：QTable 拒绝把 QNote 批注写入其他工作区的表，防止跨团队泄露
+- [x] 协作资产：成员可读取同工作区截图；写入/删除仍须 editor 以上
+
+### 内部试用验收（必须全部通过）
+
+1. 在 QTable 创建工作区，邀请一位 editor 和一位 viewer。
+2. editor 在 Clipper 切换到该工作区，创建批注并转为该空间的 QTable 任务。
+3. 第二位 editor 刷新同一网页：能看到创建者、定位批注、编辑批注、更新任务状态。
+4. viewer 刷新同一网页：能看到和定位全部批注与任务，但没有编辑、删除、创建任务或状态修改入口。
+5. 试图把批注转到另一个工作区的 QTable 表时，服务端必须拒绝请求。
+6. 将成员从 QTable 工作区移除后，等待身份投影刷新或重新登录；其 QNote/Clipper 请求必须返回无访问权限。
 
 ---
 

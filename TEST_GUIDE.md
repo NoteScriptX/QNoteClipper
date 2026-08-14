@@ -1,222 +1,56 @@
-# 快速测试指南 - Mock 登录模式
+# QNote Clipper 内部试用验收
 
-## ✅ 问题已解决
+> 当前版本使用 **QNote 会话服务的账号密码登录**，不再使用 Mock
+> Authentication 或浏览器 OAuth 跳转。请以本文件为准。
 
-之前的 "Authorization page could not be loaded" 错误是因为:
-- Chrome 扩展的 OAuth API 要求 HTTPS
-- 本地开发使用 `http://localhost` 不被支持
+## 启动条件
 
-**解决方案**: 已启用 Mock 认证模式,无需后端即可测试!
+1. 启动 QTable，创建至少一个工作区和一个行动表。
+2. 启动 QNoteServer，并确认它和 QTable 使用相同的 `SECRET_KEY`，且
+   `QTABLE_API_URL` 指向 QTable。
+3. 为插件设置 `PLASMO_PUBLIC_QNOTE_API_URL` 和
+   `PLASMO_PUBLIC_QTABLE_WEB_URL`；本地默认分别为 `http://localhost:9001`
+   和 `http://localhost:9100`。
+4. 在 `QNoteClipper` 目录运行 `pnpm build`，在 Chrome 扩展管理页加载
+   `build/chrome-mv3-prod`。
 
----
+## 单人闭环
 
-## 🚀 立即测试 (3 步)
+1. 用 QTable 用户账号登录 Clipper。
+2. 在网页上选中文字，写一条批注；刷新页面后批注仍能定位。
+3. 在侧栏创建任务，选择当前工作区内的行动表和负责人。
+4. 在 QTable 打开该任务，确认原文、来源页面和 QNote 回溯链接存在；从
+   链接返回网页后能定位原文。
+5. 在 Clipper 修改任务状态，确认 QTable 中状态同步更新。
 
-### 第 1 步: 重新加载扩展
+## 团队协作闭环
 
-1. 打开 Chrome,访问 `chrome://extensions/`
-2. 找到 "NoteScript Clipper"
-3. 点击刷新图标 🔄 (或关闭再重新加载)
+1. 在 QTable 将第二名用户加入工作区，角色设为 `editor`；将第三名用户
+   加入同一空间，角色设为 `viewer`。
+2. editor A 在 Clipper 的工作区选择器中选中团队空间，创建批注和任务。
+3. editor B 登录后打开同一网页：应看到 A 的创建者名称、能定位和编辑
+   批注、并可更新关联任务状态。
+4. viewer 登录后打开同一网页：应看到同一批注和任务，但编辑、删除、创建
+   任务和状态下拉均不可用；尝试从旧页面或直接请求写接口也必须得到 403。
+5. 选择另一个工作区后，页面批注、可选任务表和负责人均只显示该空间数据。
+6. 尝试用 API 将团队 A 的批注创建到团队 B 的表中，QTable 必须返回 400。
+7. 从 QTable 移除成员后重新登录该成员；其对该空间的 QNote 请求必须被拒绝。
 
-### 第 2 步: 测试登录
+## 发布前质量门
 
-1. 打开任意网页
-2. 点击扩展图标,打开 sidepanel
-3. 你会看到 "请登录" 提示
-4. 点击 **"去登录"** 按钮
-5. 等待约 0.5 秒
-6. ✅ 登录成功!会显示:
-   ```
-   测试用户
-   test@example.com
-   [头像]
-   ```
-
-### 第 3 步: 测试功能
-
-登录后,你可以:
-- ✅ 创建任务(点击文本选择批注)
-- ✅ 查看批注列表
-- ✅ 设置默认表格
-- ✅ 退出登录
-
----
-
-## 🔍 验证登录状态
-
-### 方法 1: 查看 UI
-- 顶部应该显示用户信息(头像、姓名、邮箱)
-- "去登录" 按钮变成 "退出登录"
-
-### 方法 2: 查看控制台日志
-
-打开 DevTools (`F12` 或右键 → 检查):
-
-**Service Worker 日志:**
-```
-Using mock authentication
-Performing mock login...
-Mock login successful { id: "mock_user_001", name: "测试用户", ... }
-```
-
-**Sidepanel 日志:**
-```
-AUTH_STATE_CHANGED
-```
-
-### 方法 3: 查看存储数据
-
-在 DevTools Console 中运行:
-
-```javascript
-// 查看 Token
-chrome.storage.local.get('oauth_access_token', console.log)
-// 应该输出: { oauth_access_token: "mock_access_token_..." }
-
-// 查看用户信息
-chrome.storage.local.get('oauth_user_info', console.log)
-// 应该输出: { oauth_user_info: { id: "mock_user_001", name: "测试用户", ... } }
-
-// 查看设置
-chrome.storage.local.get('nsx_settings_v1', console.log)
-// 应该输出: { nsx_settings_v1: { loggedIn: true, userName: "测试用户", ... } }
-```
-
----
-
-## 🎯 测试场景
-
-### 场景 1: 完整登录流程
-1. 退出登录(如果已登录)
-2. 点击 "去登录"
-3. 验证用户信息显示
-4. ✅ 通过
-
-### 场景 2: 创建任务
-1. 确保已登录
-2. 在网页上选择一段文本
-3. 右键 → "Create Task"(或你的触发方式)
-4. Sidepanel 应该打开并显示任务表单
-5. 填写表单并提交
-6. ✅ 任务创建成功
-
-### 场景 3: 退出登录
-1. 进入 "设置" 标签
-2. 点击 "退出登录"
-3. 用户信息消失
-4. 显示 "未登录"
-5. ✅ 退出成功
-
-### 场景 4: 持久化
-1. 登录
-2. 关闭浏览器
-3. 重新打开浏览器和扩展
-4. ✅ 应该仍然保持登录状态
-
----
-
-## 🐛 如果出现问题
-
-### 问题 1: 点击登录没反应
-**检查:**
-- 打开 DevTools → Console
-- 查看是否有错误信息
-- 确认扩展已重新加载
-
-**解决:**
 ```bash
-# 重新构建扩展
-cd /Users/evan/Documents/work/gitee/note-script-clipper
+# QNoteServer
+pytest -q
+
+# QTable
+PYTHONPATH=. pytest -q tests/test_clipper_integration.py tests/test_auth_refresh.py
+
+# QNoteClipper
 pnpm build
+
+# QNote desktop
+npm run typecheck
 ```
 
-然后在 `chrome://extensions/` 重新加载
-
-### 问题 2: 登录后不显示用户信息
-**检查:**
-- 查看 Service Worker 日志
-- 确认看到 "Mock login successful"
-
-**解决:**
-- 手动刷新 sidepanel
-- 或点击顶部的 "刷新" 按钮
-
-### 问题 3: 看到 "Authorization page could not be loaded"
-**原因:** Mock 模式未启用
-
-**检查配置:**
-```typescript
-// utils/auth.ts 第 18 行
-USE_MOCK_AUTH: true  // 必须是 true
-```
-
-**解决:**
-- 确认配置正确
-- 重新加载扩展
-
----
-
-## 📊 Mock 模式 vs 真实 OAuth
-
-| 特性 | Mock 模式 | 真实 OAuth |
-|------|----------|-----------|
-| 需要后端 | ❌ 不需要 | ✅ 需要 |
-| 需要 HTTPS | ❌ 不需要 | ✅ 必须 |
-| 登录速度 | ⚡ 快 (0.5s) | 🐢 慢 (网络延迟) |
-| 用户信息 | 🎭 固定(测试用户) | 👤 真实用户 |
-| Token 有效性 | ❌ 无效(仅测试) | ✅ 有效 |
-| API 调用 | ❌ 会被拒绝 | ✅ 正常工作 |
-| 适用场景 | 开发/UI测试 | 生产环境 |
-
----
-
-## 🔄 切换到真实 OAuth
-
-当你的 QTable 后端准备好后:
-
-### 1. 准备 HTTPS 端点
-```bash
-# 使用 ngrok
-ngrok http 8000
-# 获得: https://abc123.ngrok.io
-```
-
-### 2. 更新配置
-编辑 `utils/auth.ts`:
-```typescript
-const OAUTH_CONFIG = {
-  AUTHORIZATION_ENDPOINT: "https://abc123.ngrok.io/oauth/authorize",
-  TOKEN_ENDPOINT: "https://abc123.ngrok.io/oauth/token",
-  USER_INFO_ENDPOINT: "https://abc123.ngrok.io/api/user/me",
-  CLIENT_ID: "note-script-clipper",
-  SCOPE: "openid profile email",
-  USE_MOCK_AUTH: false  // ← 改为 false
-}
-```
-
-### 3. 在 QTable 注册客户端
-- Client ID: `note-script-clipper`
-- Redirect URI: `https://<扩展ID>.chromiumapp.org/`
-- 启用 PKCE (S256)
-
-### 4. 测试
-重新加载扩展,点击登录,应该会打开 QTable 登录页面。
-
----
-
-## 📚 更多信息
-
-- [Mock 模式详细说明](./MOCK_AUTH.md)
-- [OAuth 配置指南](./OAUTH_CONFIG.md)
-- [快速开始](./QUICK_START_OAUTH.md)
-
----
-
-## ✨ 总结
-
-✅ **问题已解决**: 不再需要 ngrok 或 HTTPS  
-✅ **立即可用**: Mock 模式已启用  
-✅ **功能完整**: 可以测试所有 UI 和交互  
-✅ **易于切换**: 一行配置切换到真实 OAuth  
-
-现在就开始测试吧! 🚀
+本轮团队协作实现已覆盖上述前三项自动验证；桌面端仅接入了共享身份初始化，
+文件协作/实时共同编辑不在本次 Clipper 内部试用范围。

@@ -12,7 +12,7 @@ import "~style.css";
 import { AnnotationList, type AnnotationPreview } from "~components/AnnotationList";
 import { Popconfirm } from "~components/Popconfirm";
 import { TaskForm } from "~components/TaskForm";
-import { createTaskFromAnnotation, deleteAnnotationFromQNote, getActionOptions, getTaskStatus, hydrateAnnotationsFromQNote, updateTaskStatus, type QTable, type QTableUser } from "~utils/api";
+import { createTaskFromAnnotation, deleteAnnotationFromQNote, getActionOptions, getSharedContext, getTaskStatus, hydrateAnnotationsFromQNote, updateTaskStatus, type QTable, type QTableUser, type SharedContext } from "~utils/api";
 import { CONTENT_LOCATE_ANNOTATION, CONTENT_OPEN_SIDEPANEL_WITH_ANNOTATION, CONTENT_REMOVE_ANNOTATION_OVERLAY, STORAGE_UPDATED, type BackgroundBroadcastMessage, type OpenSidePanelPayload } from "~utils/messaging";
 import { getSettings, patchSettings, type NsXSettings } from "~utils/settings";
 import { deleteAnnotationLocallyById, getAllAnnotations, getAnnotationById, normalizePageUrl, NSX_ANNOTATIONS_KEY, updateAnnotationById, updateAnnotationLocallyById, upsertAnnotation } from "~utils/storage";
@@ -64,6 +64,7 @@ export default function SidePanel() {
   const [items, setItems] = useState<AnnotationPreview[]>([])
   const [qtables, setQtables] = useState<QTable[]>([])
   const [qtableUsers, setQtableUsers] = useState<QTableUser[]>([])
+  const [sharedContext, setSharedContext] = useState<SharedContext | null>(null)
   const [isActionOptionsLoading, setIsActionOptionsLoading] = useState(false)
   const [pageChoices, setPageChoices] = useState<PageChoice[]>([])
   const [selectedPageUrl, setSelectedPageUrl] = useState<string | null>(null)
@@ -82,6 +83,13 @@ export default function SidePanel() {
   const refreshInFlightRef = useRef<Promise<void> | null>(null)
   const actionOptionsInFlightRef = useRef<Promise<void> | null>(null)
   const isLoggedIn = settings?.loggedIn === true
+  const selectedWorkspace = sharedContext?.workspaces.find(
+    (workspace) => workspace.id === settings?.selectedWorkspaceId
+  ) || sharedContext?.workspaces.find(
+    (workspace) => workspace.id === sharedContext.default_workspace_id
+  ) || sharedContext?.workspaces[0]
+  const selectedWorkspaceId = selectedWorkspace?.id
+  const isReadOnlyWorkspace = selectedWorkspace?.role === "viewer"
 
   const pendingText = pending?.selectedText ?? ""
   const domain = useMemo(
@@ -111,13 +119,30 @@ export default function SidePanel() {
       // Local-first：无论是否登录都展示本地批注。登录状态只影响“同步”与
       // “创建行动”能力，绝不能在未登录时清空用户已经捕获的本地数据。
       if (authState.isAuthenticated) {
+        const context = await getSharedContext()
+        setSharedContext(context)
+        const workspace = context.workspaces.find(
+          (item) => item.id === st.selectedWorkspaceId
+        ) || context.workspaces.find(
+          (item) => item.id === context.default_workspace_id
+        ) || context.workspaces[0]
+        if (!workspace) throw new Error("当前账号没有可用 QNote 工作区")
+        const selectedWorkspacePatch = {
+          selectedWorkspaceId: workspace.id,
+          selectedWorkspaceRole: workspace.role === "viewer" ? "viewer" as const : workspace.role === "owner" ? "owner" as const : "editor" as const
+        }
+        if (
+          st.selectedWorkspaceId !== selectedWorkspacePatch.selectedWorkspaceId ||
+          st.selectedWorkspaceRole !== selectedWorkspacePatch.selectedWorkspaceRole
+        ) await patchSettings(selectedWorkspacePatch)
         setSettings((current) => {
           const next = {
             ...st,
             loggedIn: true,
             userEmail: authState.user?.email ?? st.userEmail,
             userName: authState.user?.name ?? st.userName,
-            userAvatar: authState.user?.avatar_url ?? st.userAvatar
+            userAvatar: authState.user?.avatar_url ?? st.userAvatar,
+            ...selectedWorkspacePatch
           }
           return current &&
             current.loggedIn === next.loggedIn &&
@@ -131,9 +156,9 @@ export default function SidePanel() {
         // Pull the authoritative server copy before rendering. QNote outages do
         // not block access to the extension's offline cache.
         try {
-          if (info.url) await hydrateAnnotationsFromQNote(info.url)
+          if (info.url) await hydrateAnnotationsFromQNote(info.url, workspace.id)
           if (selectedPageUrl && selectedPageUrl !== info.url) {
-            await hydrateAnnotationsFromQNote(selectedPageUrl)
+            await hydrateAnnotationsFromQNote(selectedPageUrl, workspace.id)
           }
         } catch {
           // Offline-first: pending local captures remain available and will sync
@@ -155,7 +180,8 @@ export default function SidePanel() {
       const targetUrl = forceCurrent ? info.url : (selectedPageUrl || info.url)
       const normalizedTarget = normalizePageUrl(targetUrl)
       const visibleAnnotations = allAnnotations.filter(
-        (annotation) => normalizePageUrl(annotation.url) === normalizedTarget
+        (annotation) => normalizePageUrl(annotation.url) === normalizedTarget &&
+          (!selectedWorkspaceId || !annotation.workspaceId || annotation.workspaceId === selectedWorkspaceId)
       )
       const nextItems: AnnotationPreview[] = visibleAnnotations.map((a) => ({
         id: a.id,
@@ -167,6 +193,9 @@ export default function SidePanel() {
         pageTitle: a.pageTitle,
         syncStatus: a.syncStatus,
         syncError: a.syncError,
+        authorName: sharedContext?.workspaces
+          .find((workspace) => workspace.id === a.workspaceId)
+          ?.members?.find((member) => member.id === a.userId)?.name,
         task:
           a.task?.status === "created"
             ? {
@@ -232,7 +261,7 @@ export default function SidePanel() {
       if (refreshInFlightRef.current === job) refreshInFlightRef.current = null
     })
     return job
-  }, [selectedPageUrl])
+  }, [selectedPageUrl, selectedWorkspaceId, sharedContext])
 
   const loadActionOptions = useCallback(async (): Promise<void> => {
     if (actionOptionsInFlightRef.current) return actionOptionsInFlightRef.current
@@ -240,7 +269,8 @@ export default function SidePanel() {
     const job = (async () => {
       setIsActionOptionsLoading(true)
       try {
-        const actionOptions = await getActionOptions()
+        if (!selectedWorkspaceId) throw new Error("请先选择工作区")
+        const actionOptions = await getActionOptions(selectedWorkspaceId)
         setQtables(actionOptions.tables)
         setQtableUsers(actionOptions.users)
       } catch (err) {
@@ -254,7 +284,7 @@ export default function SidePanel() {
       if (actionOptionsInFlightRef.current === job) actionOptionsInFlightRef.current = null
     })
     return job
-  }, [])
+  }, [selectedWorkspaceId])
 
   const openTaskDialog = async (annotationId: string) => {
     const item = items.find((candidate) => candidate.id === annotationId)
@@ -268,6 +298,10 @@ export default function SidePanel() {
     })
     if (!isLoggedIn) {
       setActiveTab("settings")
+      return
+    }
+    if (isReadOnlyWorkspace) {
+      setError("当前工作区为只读，无法创建行动")
       return
     }
     setTaskDialogOpen(true)
@@ -368,6 +402,10 @@ export default function SidePanel() {
     annotationId: string,
     input: { title: string; note: string }
   ) => {
+    if (isReadOnlyWorkspace) {
+      setError("当前工作区为只读，无法编辑批注")
+      return
+    }
     await updateAnnotationById(annotationId, (annotation) => ({
       ...annotation,
       title: input.title,
@@ -406,7 +444,8 @@ export default function SidePanel() {
         }).catch(() => undefined)
       }
 
-      await deleteAnnotationFromQNote(annotationId, annotation.serverId)
+      if (isReadOnlyWorkspace) throw new Error("当前工作区为只读，无法删除批注")
+      await deleteAnnotationFromQNote(annotationId, annotation.serverId, annotation.workspaceId || selectedWorkspaceId)
       setSuccess("批注已删除")
     } catch (err) {
       setError(
@@ -565,6 +604,40 @@ export default function SidePanel() {
           </div>
         </div>
 
+        {isLoggedIn && sharedContext?.workspaces.length ? (
+          <div className="border-t border-slate-100 px-3 pb-2">
+            <label className="sr-only" htmlFor="nsx-workspace-selector">切换团队工作区</label>
+            <select
+              className="w-full rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-xs font-medium text-slate-700 outline-none focus:border-indigo-400 focus:bg-white"
+              id="nsx-workspace-selector"
+              onChange={(event) => {
+                const workspace = sharedContext.workspaces.find((item) => item.id === event.target.value)
+                if (!workspace) return
+                void (async () => {
+                  const nextSettings = await patchSettings({
+                    selectedWorkspaceId: workspace.id,
+                    selectedWorkspaceRole: workspace.role === "viewer" ? "viewer" : workspace.role === "owner" ? "owner" : "editor"
+                  })
+                  setSettings(nextSettings)
+                  setQtables([])
+                  setQtableUsers([])
+                  if (pageInfo.url) await hydrateAnnotationsFromQNote(pageInfo.url, workspace.id)
+                  await refresh()
+                })()
+              }}
+              value={selectedWorkspaceId || ""}>
+              {sharedContext.workspaces.map((workspace) => (
+                <option key={workspace.id} value={workspace.id}>
+                  {workspace.name || "未命名工作区"} · {workspace.role === "viewer" ? "只读成员" : workspace.role === "owner" ? "所有者" : "协作者"} · {workspace.members?.length || 1} 人
+                </option>
+              ))}
+            </select>
+            {isReadOnlyWorkspace ? (
+              <div className="mt-1.5 text-xs text-amber-700">当前为只读工作区：可浏览、定位和查看任务，不能新增或修改内容。</div>
+            ) : null}
+          </div>
+        ) : null}
+
         {isLoggedIn && pageChoices.length > 0 ? (
           <div className="border-t border-slate-100 px-3 pb-2">
             <label className="sr-only" htmlFor="nsx-page-selector">切换批注网页</label>
@@ -661,11 +734,12 @@ export default function SidePanel() {
             ) : (
               <AnnotationList
                 items={items}
-                onStatusChange={handleStatusChange}
-                onCreateTask={(annotationId) => void openTaskDialog(annotationId)}
+                onStatusChange={isReadOnlyWorkspace ? undefined : handleStatusChange}
+                onCreateTask={isReadOnlyWorkspace ? undefined : (annotationId) => void openTaskDialog(annotationId)}
                 onLocate={displayUrl ? handleLocate : undefined}
-                onUpdate={handleUpdateAnnotation}
-                onDelete={handleDeleteAnnotation}
+                onUpdate={isReadOnlyWorkspace ? undefined : handleUpdateAnnotation}
+                onDelete={isReadOnlyWorkspace ? undefined : handleDeleteAnnotation}
+                readOnly={Boolean(isReadOnlyWorkspace)}
               />
             )}
           </>
@@ -752,7 +826,7 @@ export default function SidePanel() {
         )}
       </div>
 
-      {pending && isLoggedIn ? (
+      {pending && isLoggedIn && !isReadOnlyWorkspace ? (
         <TaskForm
           onOpenChange={(open) => {
             setTaskDialogOpen(open)
@@ -871,11 +945,13 @@ export default function SidePanel() {
           </div>
           <button
             className="rounded bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500 active:bg-indigo-700 disabled:opacity-60"
+            disabled={isLoggedIn && isReadOnlyWorkspace}
             onClick={async () => {
               if (!isLoggedIn) {
                 setActiveTab("settings")
                 return
               }
+              if (isReadOnlyWorkspace) return
               const id =
                 typeof crypto !== "undefined" && "randomUUID" in crypto
                   ? (crypto as any).randomUUID()
@@ -891,7 +967,7 @@ export default function SidePanel() {
               void loadActionOptions()
             }}
             type="button">
-            {isLoggedIn ? "新建空白任务" : "先登录 QNote"}
+            {isLoggedIn ? (isReadOnlyWorkspace ? "当前工作区只读" : "新建空白任务") : "先登录 QNote"}
           </button>
         </div>
       </div>
