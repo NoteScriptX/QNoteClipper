@@ -184,9 +184,13 @@ const uploadScreenshot = async (
     `/api/assets/upload?workspace_id=${encodeURIComponent(workspaceId)}`,
     { method: "POST", body }
   )
-  const payload = await response.json().catch(() => ({})) as { id?: string; detail?: string }
-  if (!response.ok || !payload.id) throw new Error(payload.detail || "批注截图上传失败")
-  return payload.id
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok || !payload || typeof payload !== "object" || !("id" in payload)) {
+    throw new Error(messageFromPayload(payload, `批注截图上传失败（HTTP ${response.status}）`))
+  }
+  const { id } = payload as { id?: unknown }
+  if (typeof id !== "string" || !id) throw new Error("批注截图上传失败：服务端未返回资产 ID")
+  return id
 }
 
 const annotationExtra = (annotation: NsXAnnotation) => ({
