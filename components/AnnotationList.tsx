@@ -1,4 +1,6 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
+
+import { Popconfirm } from "~components/Popconfirm"
 
 export type AnnotationTaskStatus =
   | { kind: "not_created" }
@@ -32,7 +34,10 @@ type Props = {
   onCreateTask?: (annotationId: string) => void
   onStatusChange?: (annotationId: string, value: string) => Promise<void> | void
   onLocate?: (annotationId: string) => Promise<void> | void
-  onUpdate?: (annotationId: string, input: { title: string; note: string }) => Promise<void> | void
+  onUpdate?: (
+    annotationId: string,
+    input: { title: string; note: string }
+  ) => Promise<void> | void
   onDelete?: (annotationId: string) => Promise<void> | void
 }
 
@@ -63,7 +68,22 @@ const formatRelativeTime = (ts: number) => {
   return `${mm}-${dd}`
 }
 
-export function AnnotationList({ items, onCreateTask, onStatusChange, onLocate, onUpdate, onDelete }: Props) {
+export function AnnotationList({
+  items,
+  onCreateTask,
+  onStatusChange,
+  onLocate,
+  onUpdate,
+  onDelete
+}: Props) {
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (selectedId && !items.some((item) => item.id === selectedId)) {
+      setSelectedId(null)
+    }
+  }, [items, selectedId])
+
   if (items.length === 0) {
     return (
       <div className="flex min-h-48 flex-col items-center justify-center rounded border border-dashed border-slate-200 bg-white p-6 text-center">
@@ -80,8 +100,20 @@ export function AnnotationList({ items, onCreateTask, onStatusChange, onLocate, 
 
   return (
     <div className="space-y-2">
-        {items.map((it) => (
-        <AnnotationListItem it={it} key={it.id} onCreateTask={onCreateTask} onStatusChange={onStatusChange} onLocate={onLocate} onUpdate={onUpdate} onDelete={onDelete} />
+      {items.map((it) => (
+        <AnnotationListItem
+          it={it}
+          key={it.id}
+          selected={selectedId === it.id}
+          onSelect={(annotationId) => {
+            setSelectedId(annotationId)
+            void onLocate?.(annotationId)
+          }}
+          onCreateTask={onCreateTask}
+          onStatusChange={onStatusChange}
+          onUpdate={onUpdate}
+          onDelete={onDelete}
+        />
       ))}
     </div>
   )
@@ -91,15 +123,20 @@ function AnnotationListItem({
   it,
   onCreateTask,
   onStatusChange,
-  onLocate,
   onUpdate,
-  onDelete
+  onDelete,
+  selected,
+  onSelect
 }: {
   it: AnnotationPreview
+  selected: boolean
+  onSelect: (annotationId: string) => void
   onCreateTask?: (annotationId: string) => void
   onStatusChange?: (annotationId: string, value: string) => Promise<void> | void
-  onLocate?: (annotationId: string) => Promise<void> | void
-  onUpdate?: (annotationId: string, input: { title: string; note: string }) => Promise<void> | void
+  onUpdate?: (
+    annotationId: string,
+    input: { title: string; note: string }
+  ) => Promise<void> | void
   onDelete?: (annotationId: string) => Promise<void> | void
 }) {
   const [open, setOpen] = useState(false)
@@ -107,62 +144,121 @@ function AnnotationListItem({
   const [title, setTitle] = useState(it.title || "")
   const [note, setNote] = useState(it.note || "")
   const [busy, setBusy] = useState(false)
-  const statusValue = it.task.kind === "created" ? it.task.statusValue : undefined
-  const statusOption = it.task.kind === "created" ? it.task.statusOptions?.find((option) => option.id === statusValue || option.label === statusValue) : undefined
-  const selectedStatusId = it.task.kind === "created" ? (statusOption?.id || it.task.statusOptions?.[0]?.id) : undefined
-  const statusLabel = statusOption?.label || statusValue || (it.task.kind === "created" ? "待处理" : "待创建")
+  const statusValue =
+    it.task.kind === "created" ? it.task.statusValue : undefined
+  const statusOption =
+    it.task.kind === "created"
+      ? it.task.statusOptions?.find(
+          (option) => option.id === statusValue || option.label === statusValue
+        )
+      : undefined
+  const selectedStatusId =
+    it.task.kind === "created"
+      ? statusOption?.id || it.task.statusOptions?.[0]?.id
+      : undefined
+  const statusLabel =
+    statusOption?.label ||
+    statusValue ||
+    (it.task.kind === "created" ? "待处理" : "待创建")
   const isDone = /完成|done|closed|关闭/i.test(statusLabel)
-  const status = it.task.kind === "created"
-    ? { line: isDone ? "bg-emerald-500" : "bg-indigo-500", pillClass: isDone ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-indigo-50 text-indigo-700 border-indigo-200" }
-    : { line: "bg-amber-500", pillClass: "bg-amber-50 text-amber-800 border-amber-200" }
+  const status =
+    it.task.kind === "created"
+      ? {
+          line: isDone ? "bg-emerald-500" : "bg-indigo-500",
+          pillClass: isDone
+            ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+            : "bg-indigo-50 text-indigo-700 border-indigo-200"
+        }
+      : {
+          line: "bg-amber-500",
+          pillClass: "bg-amber-50 text-amber-800 border-amber-200"
+        }
 
   return (
     <div
-      className="group flex w-full cursor-pointer gap-3 rounded border border-slate-200 bg-white p-3 text-left hover:bg-slate-50"
-      onClick={() => {
-        if (!open) void onLocate?.(it.id)
-        setOpen((v) => !v)
-      }}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault()
-          if (!open) void onLocate?.(it.id)
-          setOpen((v) => !v)
-        }
-      }}
-      role="button"
-      tabIndex={0}>
+      className={`group flex w-full gap-3 rounded-lg border p-3 text-left transition ${
+        selected
+          ? "border-indigo-300 bg-indigo-50/60 ring-1 ring-indigo-100"
+          : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
+      }`}>
       <div className={`w-1 shrink-0 rounded ${status.line}`} />
       <div className="min-w-0 flex-1">
         <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
+          <button
+            aria-label={`选中并定位批注：${it.title || excerpt(it.selectedText)}`}
+            aria-pressed={selected}
+            className="min-w-0 flex-1 cursor-pointer rounded text-left outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2"
+            onClick={() => onSelect(it.id)}
+            title="选中并定位原文"
+            type="button">
             <div className="line-clamp-2 text-sm font-semibold text-slate-900">
               {it.title || excerpt(it.selectedText)}
             </div>
             <div className="mt-1 line-clamp-1 text-xs text-slate-500">
               {notePreview(it.note)}
             </div>
-          </div>
-          <div className="shrink-0 text-right">
-            <div
-              className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${status.pillClass}`}>
-              {it.task.kind === "created" && it.task.statusOptions?.length && onStatusChange ? (
-                <select
-                  aria-label="行动状态"
-                  className={`rounded-full border px-2 py-0.5 text-xs outline-none ${status.pillClass}`}
-                  onChange={(e) => {
-                    e.stopPropagation()
-                    void onStatusChange(it.id, e.target.value)
-                  }}
-                  onClick={(e) => e.stopPropagation()}
-                  value={selectedStatusId || it.task.statusOptions[0].id}>
-                  {it.task.statusOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-                </select>
-              ) : statusLabel}
+            {selected ? (
+              <div className="mt-1.5 flex items-center gap-1 text-[11px] font-medium text-indigo-600">
+                <span aria-hidden>⌖</span>
+                已选中，点击可再次定位
+              </div>
+            ) : null}
+          </button>
+          <div className="flex shrink-0 items-start gap-1.5 text-right">
+            <div>
+              <div
+                className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${status.pillClass}`}>
+                {it.task.kind === "created" &&
+                it.task.statusOptions?.length &&
+                onStatusChange ? (
+                  <select
+                    aria-label="行动状态"
+                    className={`rounded-full border px-2 py-0.5 text-xs outline-none ${status.pillClass}`}
+                    onChange={(e) => {
+                      e.stopPropagation()
+                      void onStatusChange(it.id, e.target.value)
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    value={selectedStatusId || it.task.statusOptions[0].id}>
+                    {it.task.statusOptions.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  statusLabel
+                )}
+              </div>
+              <div className="mt-1 text-xs text-slate-400">
+                {formatRelativeTime(it.createdAt)}
+              </div>
             </div>
-            <div className="mt-1 text-xs text-slate-400">
-              {formatRelativeTime(it.createdAt)}
-            </div>
+            <button
+              aria-expanded={open}
+              aria-label={open ? "收起批注详情" : "展开批注详情"}
+              className={`flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-full border transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 ${
+                open
+                  ? "border-indigo-200 bg-indigo-100 text-indigo-700"
+                  : "border-slate-200 bg-white text-slate-500 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-600"
+              }`}
+              onClick={() => setOpen((value) => !value)}
+              title={open ? "收起详情" : "展开详情"}
+              type="button">
+              <svg
+                aria-hidden
+                className={`h-3.5 w-3.5 transition-transform ${open ? "rotate-180" : ""}`}
+                fill="none"
+                viewBox="0 0 20 20">
+                <path
+                  d="m5 7.5 5 5 5-5"
+                  stroke="currentColor"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="1.8"
+                />
+              </svg>
+            </button>
           </div>
         </div>
 
@@ -170,12 +266,50 @@ function AnnotationListItem({
           <div className="mt-3 rounded bg-white p-2">
             <div className="text-xs font-medium text-slate-500">完整批注</div>
             {editing ? (
-              <div className="mt-2 space-y-2" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
-                <input aria-label="批注标题" className="w-full rounded border border-slate-200 px-2 py-1.5 text-sm outline-none focus:border-indigo-400" onChange={(event) => setTitle(event.target.value)} placeholder="批注标题" value={title} />
-                <textarea aria-label="批注内容" className="min-h-20 w-full resize-y rounded border border-slate-200 px-2 py-1.5 text-sm outline-none focus:border-indigo-400" onChange={(event) => setNote(event.target.value)} placeholder="批注内容" value={note} />
+              <div
+                className="mt-2 space-y-2"
+                onClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => event.stopPropagation()}>
+                <input
+                  aria-label="批注标题"
+                  className="w-full rounded border border-slate-200 px-2 py-1.5 text-sm outline-none focus:border-indigo-400"
+                  onChange={(event) => setTitle(event.target.value)}
+                  placeholder="批注标题"
+                  value={title}
+                />
+                <textarea
+                  aria-label="批注内容"
+                  className="min-h-20 w-full resize-y rounded border border-slate-200 px-2 py-1.5 text-sm outline-none focus:border-indigo-400"
+                  onChange={(event) => setNote(event.target.value)}
+                  placeholder="批注内容"
+                  value={note}
+                />
                 <div className="flex justify-end gap-2">
-                  <button className="rounded px-2 py-1 text-xs text-slate-600 hover:bg-slate-100" onClick={() => { setTitle(it.title || ""); setNote(it.note || ""); setEditing(false) }} type="button">取消</button>
-                  <button className="rounded bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white disabled:opacity-60" disabled={busy || !title.trim()} onClick={async () => { setBusy(true); try { await onUpdate?.(it.id, { title: title.trim(), note }); setEditing(false) } finally { setBusy(false) } }} type="button">{busy ? "保存中…" : "保存修改"}</button>
+                  <button
+                    className="rounded px-2 py-1 text-xs text-slate-600 hover:bg-slate-100"
+                    onClick={() => {
+                      setTitle(it.title || "")
+                      setNote(it.note || "")
+                      setEditing(false)
+                    }}
+                    type="button">
+                    取消
+                  </button>
+                  <button
+                    className="rounded bg-indigo-600 px-2.5 py-1 text-xs font-medium text-white disabled:opacity-60"
+                    disabled={busy || !title.trim()}
+                    onClick={async () => {
+                      setBusy(true)
+                      try {
+                        await onUpdate?.(it.id, { title: title.trim(), note })
+                        setEditing(false)
+                      } finally {
+                        setBusy(false)
+                      }
+                    }}
+                    type="button">
+                    {busy ? "保存中…" : "保存修改"}
+                  </button>
                 </div>
               </div>
             ) : (
@@ -184,24 +318,73 @@ function AnnotationListItem({
               </div>
             )}
             <div className="mt-2 text-xs text-slate-400">
-              类型：{it.mode === "line" ? "手绘划线" : it.mode === "underline" ? "文字下划线" : it.mode === "box" ? "框选" : "文字高亮"}
+              类型：
+              {it.mode === "line"
+                ? "手绘划线"
+                : it.mode === "underline"
+                  ? "文字下划线"
+                  : it.mode === "box"
+                    ? "框选"
+                    : "文字高亮"}
             </div>
             {it.syncStatus === "error" ? (
-              <div className="mt-2 rounded bg-rose-50 px-2 py-1.5 text-xs text-rose-700" title={it.syncError}>同步失败，将自动重试：{it.syncError || "QNote 暂时不可用"}</div>
+              <div
+                className="mt-2 rounded bg-rose-50 px-2 py-1.5 text-xs text-rose-700"
+                title={it.syncError}>
+                同步失败，将自动重试：{it.syncError || "QNote 暂时不可用"}
+              </div>
             ) : it.syncStatus === "pending" || it.syncStatus === "syncing" ? (
-              <div className="mt-2 text-xs text-amber-600">正在同步到 QNote…</div>
+              <div className="mt-2 text-xs text-amber-600">
+                正在同步到 QNote…
+              </div>
             ) : (
-              <div className="mt-2 text-xs text-emerald-600">已同步到 QNote</div>
+              <div className="mt-2 text-xs text-emerald-600">
+                已同步到 QNote
+              </div>
             )}
 
             <div className="mt-3 flex items-center justify-between gap-2">
               <div className="truncate text-xs text-slate-400">
                 {it.pageTitle || "当前网页"}
               </div>
-              <div className="flex shrink-0 items-center gap-1" onClick={(event) => event.stopPropagation()}>
-                <button className="rounded px-2 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-50" onClick={() => void onLocate?.(it.id)} type="button">定位原文</button>
-                <button className="rounded px-2 py-1 text-xs text-slate-600 hover:bg-slate-100" onClick={() => setEditing(true)} type="button">编辑</button>
-                <button className="rounded px-2 py-1 text-xs text-rose-600 hover:bg-rose-50 disabled:opacity-60" disabled={busy} onClick={async () => { if (!confirm("确定删除这条批注吗？已创建的 QTable 行动会保留。")) return; setBusy(true); try { await onDelete?.(it.id) } finally { setBusy(false) } }} type="button">删除</button>
+              <div
+                className="flex shrink-0 items-center gap-1"
+                onClick={(event) => event.stopPropagation()}>
+                <button
+                  className="rounded px-2 py-1 text-xs font-medium text-indigo-600 hover:bg-indigo-50"
+                  onClick={() => onSelect(it.id)}
+                  type="button">
+                  定位原文
+                </button>
+                <button
+                  className="rounded px-2 py-1 text-xs text-slate-600 hover:bg-slate-100"
+                  onClick={() => setEditing(true)}
+                  type="button">
+                  编辑
+                </button>
+                <Popconfirm
+                  cancelText="取消"
+                  description="已创建的 QTable 行动会保留。"
+                  okText="删除"
+                  okType="danger"
+                  title="确定删除这条批注吗？"
+                  onCancel={() => undefined}
+                  onConfirm={async () => {
+                    setBusy(true)
+                    try {
+                      await onDelete?.(it.id)
+                    } finally {
+                      setBusy(false)
+                    }
+                  }}
+                  placement="bottom">
+                  <button
+                    className="rounded px-2 py-1 text-xs text-rose-600 hover:bg-rose-50 disabled:opacity-60"
+                    disabled={busy}
+                    type="button">
+                    删除
+                  </button>
+                </Popconfirm>
               </div>
             </div>
 
@@ -236,12 +419,6 @@ function AnnotationListItem({
           </div>
         ) : null}
       </div>
-
-      {it.task.kind === "not_created" ? (
-        <div className="shrink-0 self-center text-slate-400 group-hover:text-slate-600">
-          ▸
-        </div>
-      ) : null}
     </div>
   )
 }

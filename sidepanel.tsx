@@ -10,6 +10,7 @@ import "~style.css";
 
 
 import { AnnotationList, type AnnotationPreview } from "~components/AnnotationList";
+import { Popconfirm } from "~components/Popconfirm";
 import { TaskForm } from "~components/TaskForm";
 import { createTaskFromAnnotation, deleteAnnotationFromQNote, getActionOptions, getTaskStatus, hydrateAnnotationsFromQNote, updateTaskStatus, type QTable, type QTableUser } from "~utils/api";
 import { CONTENT_LOCATE_ANNOTATION, CONTENT_OPEN_SIDEPANEL_WITH_ANNOTATION, STORAGE_UPDATED, type BackgroundBroadcastMessage, type OpenSidePanelPayload } from "~utils/messaging";
@@ -601,34 +602,6 @@ export default function SidePanel() {
       </div>
 
       <div className="p-3">
-        {error ? (
-          <div className="mb-3 rounded border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
-            <div className="flex items-center justify-between gap-2">
-              <span>{error}</span>
-              <button
-                className="rounded bg-white px-2 py-1 text-xs text-rose-700 hover:bg-rose-100"
-                onClick={() => void refresh()}
-                type="button">
-                重试
-              </button>
-            </div>
-          </div>
-        ) : null}
-
-        {success ? (
-          <div className="mb-3 rounded border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
-            <div className="flex items-center justify-between gap-2">
-              <span className="min-w-0 truncate">{success}</span>
-              <button
-                className="shrink-0 rounded bg-white px-2 py-1 text-xs text-emerald-800 hover:bg-emerald-100"
-                onClick={() => setSuccess(null)}
-                type="button">
-                关闭
-              </button>
-            </div>
-          </div>
-        ) : null}
-
         {activeTab === "annotations" ? (
           <>
             {pending ? (
@@ -706,10 +679,14 @@ export default function SidePanel() {
                   )}
                 </div>
                 {isLoggedIn ? (
-                  <button
-                    className="rounded border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
-                    onClick={async () => {
-                      if (!confirm("确定要退出登录吗？")) return
+                  <Popconfirm
+                    cancelText="不退了"
+                    description="退出后不会立即清除本地缓存，但需要重新登录才能继续同步。"
+                    okText="退出"
+                    okType="danger"
+                    title="确定要退出登录吗？"
+                    onCancel={() => undefined}
+                    onConfirm={async () => {
                       try {
                         await chrome.runtime.sendMessage({ type: "OAUTH_LOGOUT" })
                         await patchSettings({
@@ -724,9 +701,13 @@ export default function SidePanel() {
                         setError("退出失败")
                       }
                     }}
-                    type="button">
-                    退出登录
-                  </button>
+                    placement="bottom">
+                    <button
+                      className="rounded border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+                      type="button">
+                      退出登录
+                    </button>
+                  </Popconfirm>
                 ) : <div className="text-xs text-slate-500">请在下方输入账号登录</div>}
               </div>
             </div>
@@ -792,6 +773,71 @@ export default function SidePanel() {
           selectedText={pendingText}
           defaultTitle={pending.title}
         />
+      ) : null}
+
+      {success || error ? (
+        <div className="pointer-events-none fixed inset-x-0 top-2 z-50 flex flex-col items-center gap-2 px-3">
+          {success ? (
+            <div
+              className="nsx-message pointer-events-auto flex max-w-md items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50/95 px-3 py-2 text-sm text-emerald-800 shadow-lg ring-1 ring-emerald-100/60 backdrop-blur"
+              role="status">
+              <svg
+                aria-hidden
+                className="mt-0.5 h-4 w-4 shrink-0"
+                fill="none"
+                viewBox="0 0 24 24">
+                <path
+                  d="m5 12 4 4 10-10"
+                  stroke="currentColor"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                />
+              </svg>
+              <span className="min-w-0 flex-1 break-words">{success}</span>
+              <button
+                aria-label="关闭"
+                className="shrink-0 rounded bg-white/70 px-2 py-1 text-xs hover:bg-white"
+                onClick={() => setSuccess(null)}
+                type="button">
+                关闭
+              </button>
+            </div>
+          ) : null}
+          {error ? (
+            <div
+              className="nsx-message pointer-events-auto flex max-w-md items-start gap-2 rounded-lg border border-rose-200 bg-rose-50/95 px-3 py-2 text-sm text-rose-700 shadow-lg ring-1 ring-rose-100/60 backdrop-blur"
+              role="alert">
+              <svg
+                aria-hidden
+                className="mt-0.5 h-4 w-4 shrink-0"
+                fill="none"
+                viewBox="0 0 24 24">
+                <path
+                  d="M12 8v5m0 4h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
+                  stroke="currentColor"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                />
+              </svg>
+              <span className="min-w-0 flex-1 break-words">{error}</span>
+              <button
+                className="shrink-0 rounded bg-white/70 px-2 py-1 text-xs text-rose-700 hover:bg-white"
+                onClick={() => void refresh()}
+                type="button">
+                重试
+              </button>
+              <button
+                aria-label="关闭"
+                className="shrink-0 rounded bg-white/70 px-2 py-1 text-xs hover:bg-white"
+                onClick={() => setError(null)}
+                type="button">
+                关闭
+              </button>
+            </div>
+          ) : null}
+        </div>
       ) : null}
 
       <div className="fixed bottom-0 left-0 right-0 z-10 border-t border-slate-200 bg-white/95 px-3 py-2 backdrop-blur">
