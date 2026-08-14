@@ -8,6 +8,7 @@ import {
   type AnnotationMode,
   type NsXAnnotation
 } from "./storage"
+import { getSettings } from "./settings"
 
 export { QNOTE_API_BASE_URL }
 
@@ -199,7 +200,6 @@ const syncAnnotationToQNoteImpl = async (
   annotation: NsXAnnotation
 ): Promise<NsXAnnotation> => {
   const context = await getSharedContext()
-  const { getSettings } = await import("./settings")
   const settings = await getSettings()
   const workspaceId = annotation.workspaceId || settings.selectedWorkspaceId || context.default_workspace_id || context.workspaces[0]?.id
   if (!workspaceId) throw new Error("当前账号没有可用 QNote 工作区")
@@ -320,7 +320,6 @@ export const hydrateAnnotationsFromQNote = async (
   preferredWorkspaceId?: string
 ): Promise<void> => {
   const context = await getSharedContext()
-  const { getSettings } = await import("./settings")
   const settings = await getSettings()
   const workspaceId = preferredWorkspaceId || settings.selectedWorkspaceId || context.default_workspace_id || context.workspaces[0]?.id
   if (!workspaceId || !url) return

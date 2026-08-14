@@ -1,7 +1,7 @@
 # OAuth 2.0 + PKCE Authentication Configuration
 
 ## Overview
-This document describes the OAuth 2.0 authentication implementation for the NoteScript Clipper browser extension.
+This document describes the OAuth 2.0 authentication implementation for the QNote Clipper browser extension.
 
 ## Architecture
 

@@ -1,8 +1,8 @@
 {
   "name": "note-script-clipper",
-  "displayName": "NoteScript Clipper",
+  "displayName": "QNote Clipper",
   "version": "0.1.0",
-  "description": "NoteScript browser clipper (MVP).",
+  "description": "QNote browser clipper (MVP).",
   "author": "Evan Zhao",
   "scripts": {
     "dev": "plasmo dev",

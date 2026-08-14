@@ -17,12 +17,18 @@ import { clearSharedContextCache, createTaskFromAnnotation, getActionOptions, ge
 
 const syncInFlight = new Set<string>()
 
-const syncPendingAnnotations = async (ids?: string[]) => {
+const syncPendingAnnotations = async (
+  ids?: string[],
+  includePreviousErrors = false
+) => {
   if (!(await getValidAccessToken())) return
   const requested = ids ? new Set(ids) : null
   const annotations = await getAllAnnotations()
   const pending = annotations
-    .filter((annotation) => annotation.syncStatus === "pending" || annotation.syncStatus === "error")
+    .filter((annotation) =>
+      annotation.syncStatus === "pending" ||
+      (includePreviousErrors && annotation.syncStatus === "error")
+    )
     .filter((annotation) => !requested || requested.has(annotation.id))
   for (let offset = 0; offset < pending.length; offset += 4) {
     await Promise.all(
@@ -117,7 +123,7 @@ type OAuthMessage =
 
 const createContextMenus = () => {
   chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({ id: "nsx-root", title: "NoteScript 批注", contexts: ["page", "selection"] })
+    chrome.contextMenus.create({ id: "nsx-root", title: "QNote 批注", contexts: ["page", "selection"] })
     chrome.contextMenus.create({ id: "nsx-text", parentId: "nsx-root", title: "文字批注", contexts: ["selection"] })
     chrome.contextMenus.create({ id: "nsx-underline", parentId: "nsx-root", title: "文字下划线", contexts: ["selection"] })
     chrome.contextMenus.create({ id: "nsx-line", parentId: "nsx-root", title: "手绘划线（一次）", contexts: ["page", "selection"] })
@@ -125,9 +131,16 @@ const createContextMenus = () => {
   })
 }
 
-chrome.runtime.onInstalled.addListener(createContextMenus)
-chrome.runtime.onStartup.addListener(createContextMenus)
-createContextMenus()
+const initializeExtension = () => {
+  createContextMenus()
+  // A worker restart is a safe recovery point for failed local captures. This
+  // intentionally uses the bounded retry path, not the storage-event path.
+  void syncPendingAnnotations(undefined, true)
+}
+
+chrome.runtime.onInstalled.addListener(initializeExtension)
+chrome.runtime.onStartup.addListener(initializeExtension)
+initializeExtension()
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (!tab?.id) return
   const message = info.menuItemId === "nsx-text"
@@ -253,7 +266,7 @@ chrome.runtime.onMessage.addListener(
               selectedWorkspaceRole: workspace?.role === "viewer" ? "viewer" : workspace?.role === "owner" ? "owner" : workspace ? "editor" : undefined
             })
           }
-          await syncPendingAnnotations()
+          await syncPendingAnnotations(undefined, true)
           // Notify sidepanel to refresh
           chrome.runtime.sendMessage({ type: "AUTH_STATE_CHANGED" })
           sendResponse({ ok: true })
@@ -335,6 +348,11 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   const { urls, ids } = diffAnnotationUrls(change.oldValue, change.newValue)
 
   ;(async () => {
+    // A failed server request changes the local state to `error`. Retrying it
+    // immediately from this storage event used to form an invisible hot loop:
+    // the UI was almost always rendering `syncing`, never the useful server
+    // error. New/edited (`pending`) captures still sync immediately; failures
+    // retry on the normal alarm or after the next successful login.
     if (ids.length) await syncPendingAnnotations(ids)
     try {
       await broadcastFromExtension({
@@ -379,6 +397,6 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     })()
   }
   if (alarm.name === "qnoteAnnotationSync") {
-    void syncPendingAnnotations()
+    void syncPendingAnnotations(undefined, true)
   }
 })
