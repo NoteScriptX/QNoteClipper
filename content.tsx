@@ -6,9 +6,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AnnotationCard } from "~components/AnnotationCard";
 import { Bubble } from "~components/Bubble";
-import { createFingerprintFromRange, createFingerprintFromSelection, getMergedClientRects, locateRangeFromFingerprint } from "~utils/anchor";
+import { createFingerprintFromRange, createFingerprintFromSelection, getMergedClientRects, locateRangeFromFingerprint, type TextAnchorFingerprint } from "~utils/anchor";
 import { CLIPPER_CAPTURE_ANNOTATION_IMAGE, CONTENT_ACTIVATE_DRAW_MODE, CONTENT_LOCATE_ANNOTATION, CONTENT_OPEN_SELECTION_CARD, requestFromBackground, STORAGE_UPDATED } from "~utils/messaging";
-import { getAnnotationsByUrl, normalizePageUrl, NSX_ANNOTATIONS_KEY, upsertAnnotation, type AnnotationMode, type NsXAnnotation } from "~utils/storage";
+import { getAnnotationById, getAnnotationsByUrl, normalizePageUrl, NSX_ANNOTATIONS_KEY, upsertAnnotation, type AnnotationMode, type NsXAnnotation } from "~utils/storage";
 
 
 
@@ -36,6 +36,11 @@ type BubbleState =
       x: number
       y: number
       selectionText: string
+      // Keep a snapshot while the text is still selected. Clicking the floating
+      // button moves focus into the Shadow DOM on some pages, which can clear
+      // window.getSelection() before the click handler runs.
+      fingerprint: TextAnchorFingerprint
+      rects: DOMRect[]
     }
 
 type HighlightRect = {
@@ -420,6 +425,11 @@ export default function Content() {
         setBubble({ visible: false })
         return
       }
+      const fingerprint = createFingerprintFromSelection(selection)
+      if (!fingerprint) {
+        setBubble({ visible: false })
+        return
+      }
       const rect = getSelectionRect(selection)
       if (!rect) return
       const pos = computeBubblePosition(rect)
@@ -427,7 +437,9 @@ export default function Content() {
         visible: true,
         x: pos.x,
         y: pos.y,
-        selectionText: selected
+        selectionText: selected,
+        fingerprint,
+        rects: getMergedClientRects(selection.getRangeAt(0))
       })
     }
 
@@ -506,21 +518,28 @@ export default function Content() {
 
   const onBubbleClick = useCallback(async (mode: "highlight" | "underline" = "highlight") => {
     const selection = window.getSelection()
-    if (!selection) return
-    if (!selection.rangeCount) return
-    const fp = createFingerprintFromSelection(selection)
+    // Prefer the snapshot made on mouseup. It is the only reliable source once
+    // the floating button has received focus; the live browser selection may
+    // already be empty at that point.
+    const liveFingerprint = selection?.rangeCount
+      ? createFingerprintFromSelection(selection)
+      : null
+    const fp = bubble.visible ? bubble.fingerprint : liveFingerprint
     if (!fp) return
 
     setBubble({ visible: false })
-    const r = selection.getRangeAt(0)
-    const rects = getMergedClientRects(r)
+    const rects = bubble.visible
+      ? bubble.rects
+      : selection?.rangeCount
+        ? getMergedClientRects(selection.getRangeAt(0))
+        : []
     ephemeralRectsRef.current = rects
     setEphemeralRects(rects)
     if (ephemeralTimerRef.current != null) {
       window.clearTimeout(ephemeralTimerRef.current)
       ephemeralTimerRef.current = null
     }
-    const selectionRect = getSelectionRect(selection)
+    const selectionRect = selection ? getSelectionRect(selection) : null
     const fallbackBubble = selectionRect ? computeBubblePosition(selectionRect) : null
     const pos = bubble.visible
       ? computeCardPositionFromBubble({ x: bubble.x, y: bubble.y })
@@ -544,7 +563,7 @@ export default function Content() {
       mode
     }
 
-    selection.removeAllRanges()
+    selection?.removeAllRanges()
     setCard({
       visible: true,
       x: pos.x,
@@ -594,28 +613,30 @@ export default function Content() {
 
   const saveDraft = useCallback(
     async (draft: DraftAnnotation, input: { title: string; note: string }) => {
-      try {
-        const annotation: NsXAnnotation = {
-          id: draft.id,
-          url: draft.url,
-          pageTitle: draft.pageTitle,
-          createdAt: draft.createdAt,
-          selectedText: draft.selectedText,
-          title: input.title.trim(),
-          note: input.note,
-      mode: draft.mode,
-      box: draft.box,
-      line: draft.line,
-      shapeAnchor: draft.shapeAnchor,
-      screenshotDataUrl: draft.screenshotDataUrl,
-          anchor: draft.anchor,
-          locateStatus: draft.locateStatus
-        }
-        await upsertAnnotation(annotation)
-        await refreshHighlights()
-      } catch {
-        // ignore
+      const annotation: NsXAnnotation = {
+        id: draft.id,
+        url: draft.url,
+        pageTitle: draft.pageTitle,
+        createdAt: draft.createdAt,
+        selectedText: draft.selectedText,
+        title: input.title.trim(),
+        note: input.note,
+        mode: draft.mode,
+        box: draft.box,
+        line: draft.line,
+        shapeAnchor: draft.shapeAnchor,
+        screenshotDataUrl: draft.screenshotDataUrl,
+        anchor: draft.anchor,
+        locateStatus: draft.locateStatus
       }
+      await upsertAnnotation(annotation)
+
+      // Never report success until the local-first write has actually become
+      // observable. Previously this function swallowed every write failure,
+      // so the card closed with an "已保存" state although no list item existed.
+      const saved = await getAnnotationById(draft.id)
+      if (!saved) throw new Error("批注未能写入本地，请重试")
+      await refreshHighlights()
     },
     [refreshHighlights]
   )

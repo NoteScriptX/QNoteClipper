@@ -55,6 +55,83 @@ export type NsXAnnotation = {
   pendingTaskMutationId?: string
 }
 
+const optionalString = (value: unknown): string | undefined =>
+  typeof value === "string" ? value : undefined
+
+const finiteNumber = (value: unknown, fallback = 0): number =>
+  typeof value === "number" && Number.isFinite(value) ? value : fallback
+
+const safeBox = (value: NsXAnnotation["box"]): NsXAnnotation["box"] => {
+  if (!value || typeof value !== "object") return undefined
+  return {
+    left: finiteNumber(value.left),
+    top: finiteNumber(value.top),
+    width: finiteNumber(value.width),
+    height: finiteNumber(value.height)
+  }
+}
+
+/**
+ * `chrome.storage` accepts JSON-like values only. Keep this boundary explicit:
+ * selection and drawing APIs expose browser objects (for example DOMRect and
+ * Window-backed values) that must never leak into the persisted annotation.
+ */
+const serializeAnnotation = (annotation: NsXAnnotation): NsXAnnotation => ({
+  id: optionalString(annotation.id) || "",
+  url: optionalString(annotation.url) || "",
+  pageTitle: optionalString(annotation.pageTitle),
+  createdAt: finiteNumber(annotation.createdAt, Date.now()),
+  selectedText: optionalString(annotation.selectedText) || "",
+  title: optionalString(annotation.title),
+  note: optionalString(annotation.note),
+  mode: ["highlight", "line", "box", "underline"].includes(annotation.mode || "")
+    ? annotation.mode
+    : "highlight",
+  box: safeBox(annotation.box),
+  line: Array.isArray(annotation.line)
+    ? annotation.line.map((point) => ({
+        x: finiteNumber(point?.x),
+        y: finiteNumber(point?.y)
+      }))
+    : undefined,
+  shapeAnchor: safeBox(annotation.shapeAnchor),
+  screenshotDataUrl: optionalString(annotation.screenshotDataUrl),
+  task: annotation.task?.status === "created"
+    ? {
+        status: "created",
+        taskId: optionalString(annotation.task.taskId) || "",
+        qtableUrl: optionalString(annotation.task.qtableUrl),
+        tableId: optionalString(annotation.task.tableId),
+        statusFieldId: optionalString(annotation.task.statusFieldId),
+        statusFieldName: optionalString(annotation.task.statusFieldName),
+        statusFieldType: optionalString(annotation.task.statusFieldType),
+        statusValue: optionalString(annotation.task.statusValue),
+        statusOptions: Array.isArray(annotation.task.statusOptions)
+          ? annotation.task.statusOptions
+              .filter((option) => typeof option?.id === "string" && typeof option?.label === "string")
+              .map((option) => ({ id: option.id, label: option.label }))
+          : undefined
+      }
+    : undefined,
+  anchor: {
+    selectedText: optionalString(annotation.anchor?.selectedText),
+    xpath: optionalString(annotation.anchor?.xpath) || "",
+    prefix: optionalString(annotation.anchor?.prefix) || "",
+    suffix: optionalString(annotation.anchor?.suffix) || "",
+    context: optionalString(annotation.anchor?.context) || ""
+  },
+  locateStatus: annotation.locateStatus === "maybe_lost" ? "maybe_lost" : "ok",
+  serverId: optionalString(annotation.serverId),
+  serverVersion: finiteNumber(annotation.serverVersion, 0) || undefined,
+  workspaceId: optionalString(annotation.workspaceId),
+  assetId: optionalString(annotation.assetId),
+  syncStatus: ["pending", "syncing", "synced", "error"].includes(annotation.syncStatus || "")
+    ? annotation.syncStatus
+    : undefined,
+  syncError: optionalString(annotation.syncError),
+  pendingTaskMutationId: optionalString(annotation.pendingTaskMutationId)
+})
+
 export const getAllAnnotations = async (): Promise<NsXAnnotation[]> => {
   const res = await chrome.storage.local.get(NSX_ANNOTATIONS_KEY)
   const raw = res?.[NSX_ANNOTATIONS_KEY]
@@ -72,10 +149,11 @@ export const getAnnotationById = async (
 export const setAllAnnotations = async (
   annotations: NsXAnnotation[]
 ): Promise<void> => {
-  const current = await getAllAnnotations()
-  if (JSON.stringify(current) === JSON.stringify(annotations)) return
+  const current = (await getAllAnnotations()).map(serializeAnnotation)
+  const next = annotations.map(serializeAnnotation)
+  if (JSON.stringify(current) === JSON.stringify(next)) return
   await chrome.storage.local.set({
-    [NSX_ANNOTATIONS_KEY]: annotations
+    [NSX_ANNOTATIONS_KEY]: next
   })
 }
 
