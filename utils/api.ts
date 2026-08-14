@@ -358,16 +358,19 @@ export const hydrateAnnotationsFromQNote = async (url: string): Promise<void> =>
   await applyServerAnnotations(hydrated)
 }
 
-export const deleteAnnotationFromQNote = async (annotationId: string): Promise<void> => {
+export const deleteAnnotationFromQNote = async (
+  annotationId: string,
+  knownServerId?: string
+): Promise<void> => {
   const local = await getAnnotationById(annotationId)
-  if (!local) return
-  if (local.serverId) {
+  const serverId = knownServerId || local?.serverId
+  if (serverId) {
     try {
       await qnoteGraphQL<{ deleteAnnotation: string }>(
         `mutation DeleteAnnotation($annotationId: ID!) {
           deleteAnnotation(annotationId: $annotationId)
         }`,
-        { annotationId: local.serverId }
+        { annotationId: serverId }
       )
     } catch (error) {
       if (error instanceof Error && /not found|不存在/i.test(error.message)) return

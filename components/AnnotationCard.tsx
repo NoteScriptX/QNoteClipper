@@ -139,7 +139,7 @@ export function AnnotationCard({
             type="button">
             {savedFlash ? "已保存 ✓" : isSaving ? "保存中…" : "保存批注"}
           </button>
-          <div className="mt-2 text-xs text-slate-500">批注保存后，可随时在 QNote Clipper 中选择“创建行动”并关联 QTable 数据表。</div>
+          <div className="mt-2 text-xs text-slate-500">批注保存后，可随时在 QNote Clipper 中选择“创建任务”并关联 QTable 数据表。</div>
         </div>
       </div>
     </div>

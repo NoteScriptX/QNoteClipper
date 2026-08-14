@@ -7,6 +7,7 @@ export const SIDEPANEL_TASK_CREATED = "SIDEPANEL_TASK_CREATED" as const
 export const CONTENT_OPEN_SELECTION_CARD = "CONTENT_OPEN_SELECTION_CARD" as const
 export const CONTENT_ACTIVATE_DRAW_MODE = "CONTENT_ACTIVATE_DRAW_MODE" as const
 export const CONTENT_LOCATE_ANNOTATION = "CONTENT_LOCATE_ANNOTATION" as const
+export const CONTENT_REMOVE_ANNOTATION_OVERLAY = "CONTENT_REMOVE_ANNOTATION_OVERLAY" as const
 export const CLIPPER_GET_TASK_OPTIONS = "CLIPPER_GET_TASK_OPTIONS" as const
 export const CLIPPER_CREATE_TASK = "CLIPPER_CREATE_TASK" as const
 export const CLIPPER_CAPTURE_ANNOTATION_IMAGE = "CLIPPER_CAPTURE_ANNOTATION_IMAGE" as const
@@ -66,6 +67,7 @@ export type ContentCommandMessage =
   | { type: typeof CONTENT_OPEN_SELECTION_CARD; mode?: "highlight" | "underline" }
   | { type: typeof CONTENT_ACTIVATE_DRAW_MODE; mode: "line" | "box" }
   | { type: typeof CONTENT_LOCATE_ANNOTATION; annotationId: string }
+  | { type: typeof CONTENT_REMOVE_ANNOTATION_OVERLAY; annotationId: string }
 
 export type BackgroundBroadcastMessage =
   | {

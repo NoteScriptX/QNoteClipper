@@ -89,10 +89,10 @@ export function AnnotationList({
       <div className="flex min-h-48 flex-col items-center justify-center rounded border border-dashed border-slate-200 bg-white p-6 text-center">
         <div className="text-3xl">🗒️</div>
         <div className="mt-3 text-sm font-semibold text-slate-900">
-          选中网页文字，即刻捕获并创建行动
+          选中网页文字，即刻捕获并创建任务
         </div>
         <div className="mt-1 text-sm text-slate-500">
-          松开鼠标后点击浮标，写下批注；需要时再创建可追踪行动。
+          松开鼠标后点击浮标，写下批注；需要时再创建可追踪任务。
         </div>
       </div>
     )
@@ -156,10 +156,7 @@ function AnnotationListItem({
     it.task.kind === "created"
       ? statusOption?.id || it.task.statusOptions?.[0]?.id
       : undefined
-  const statusLabel =
-    statusOption?.label ||
-    statusValue ||
-    (it.task.kind === "created" ? "待处理" : "待创建")
+  const statusLabel = statusOption?.label || statusValue || "待处理"
   const isDone = /完成|done|closed|关闭/i.test(statusLabel)
   const status =
     it.task.kind === "created"
@@ -169,10 +166,7 @@ function AnnotationListItem({
             ? "bg-emerald-50 text-emerald-700 border-emerald-200"
             : "bg-indigo-50 text-indigo-700 border-indigo-200"
         }
-      : {
-          line: "bg-amber-500",
-          pillClass: "bg-amber-50 text-amber-800 border-amber-200"
-        }
+      : { line: "bg-slate-300", pillClass: "" }
 
   return (
     <div
@@ -206,30 +200,30 @@ function AnnotationListItem({
           </button>
           <div className="flex shrink-0 items-start gap-1.5 text-right">
             <div>
-              <div
-                className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${status.pillClass}`}>
-                {it.task.kind === "created" &&
-                it.task.statusOptions?.length &&
-                onStatusChange ? (
-                  <select
-                    aria-label="行动状态"
-                    className={`rounded-full border px-2 py-0.5 text-xs outline-none ${status.pillClass}`}
-                    onChange={(e) => {
-                      e.stopPropagation()
-                      void onStatusChange(it.id, e.target.value)
-                    }}
-                    onClick={(e) => e.stopPropagation()}
-                    value={selectedStatusId || it.task.statusOptions[0].id}>
-                    {it.task.statusOptions.map((option) => (
-                      <option key={option.id} value={option.id}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  statusLabel
-                )}
-              </div>
+              {it.task.kind === "created" ? (
+                <div
+                  className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${status.pillClass}`}>
+                  {it.task.statusOptions?.length && onStatusChange ? (
+                    <select
+                      aria-label="任务状态"
+                      className={`rounded-full border px-2 py-0.5 text-xs outline-none ${status.pillClass}`}
+                      onChange={(e) => {
+                        e.stopPropagation()
+                        void onStatusChange(it.id, e.target.value)
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      value={selectedStatusId || it.task.statusOptions[0].id}>
+                      {it.task.statusOptions.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    statusLabel
+                  )}
+                </div>
+              ) : null}
               <div className="mt-1 text-xs text-slate-400">
                 {formatRelativeTime(it.createdAt)}
               </div>
@@ -401,7 +395,7 @@ function AnnotationListItem({
                   </a>
                 ) : (
                   <span className="shrink-0 text-xs text-slate-500">
-                    已创建行动
+                    已创建任务
                   </span>
                 )
               ) : (
@@ -412,7 +406,7 @@ function AnnotationListItem({
                     onCreateTask?.(it.id)
                   }}
                   type="button">
-                  创建行动
+                  创建任务
                 </button>
               )}
             </div>

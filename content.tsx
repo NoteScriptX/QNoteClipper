@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnnotationCard } from "~components/AnnotationCard";
 import { Bubble } from "~components/Bubble";
 import { createFingerprintFromRange, createFingerprintFromSelection, getMergedClientRects, locateRangeFromFingerprint, type TextAnchorFingerprint } from "~utils/anchor";
-import { CLIPPER_CAPTURE_ANNOTATION_IMAGE, CONTENT_ACTIVATE_DRAW_MODE, CONTENT_LOCATE_ANNOTATION, CONTENT_OPEN_SELECTION_CARD, requestFromBackground, STORAGE_UPDATED } from "~utils/messaging";
+import { CLIPPER_CAPTURE_ANNOTATION_IMAGE, CONTENT_ACTIVATE_DRAW_MODE, CONTENT_LOCATE_ANNOTATION, CONTENT_OPEN_SELECTION_CARD, CONTENT_REMOVE_ANNOTATION_OVERLAY, requestFromBackground, STORAGE_UPDATED } from "~utils/messaging";
 import { getAnnotationById, getAnnotationsByUrl, normalizePageUrl, NSX_ANNOTATIONS_KEY, upsertAnnotation, type AnnotationMode, type NsXAnnotation } from "~utils/storage";
 
 
@@ -591,6 +591,15 @@ export default function Content() {
         traceHandledRef.current = false
         locateRequestRef.current = message.annotationId
         void refreshHighlights()
+        return
+      }
+      if (message.type === CONTENT_REMOVE_ANNOTATION_OVERLAY && message.annotationId) {
+        // Remove immediately instead of waiting for the async storage broadcast.
+        // This covers text highlights, handwritten lines and boxes alike.
+        setHighlights((current) => current.filter((item) => item.id !== message.annotationId))
+        if (locateRequestRef.current === message.annotationId) {
+          locateRequestRef.current = null
+        }
       }
     }
     chrome.runtime.onMessage.addListener(listener)

@@ -71,7 +71,7 @@ export function TaskForm({
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <Dialog.Title className="text-sm font-semibold text-slate-900">
-                创建行动
+                创建任务
               </Dialog.Title>
               <div className="mt-1 line-clamp-2 text-xs text-slate-500">
                 {selectedText}
@@ -228,7 +228,7 @@ export function TaskForm({
                   创建中…
                 </span>
               ) : (
-                "创建行动"
+                "创建任务"
               )}
             </button>
           </div>

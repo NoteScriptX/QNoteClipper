@@ -13,7 +13,7 @@ import { AnnotationList, type AnnotationPreview } from "~components/AnnotationLi
 import { Popconfirm } from "~components/Popconfirm";
 import { TaskForm } from "~components/TaskForm";
 import { createTaskFromAnnotation, deleteAnnotationFromQNote, getActionOptions, getTaskStatus, hydrateAnnotationsFromQNote, updateTaskStatus, type QTable, type QTableUser } from "~utils/api";
-import { CONTENT_LOCATE_ANNOTATION, CONTENT_OPEN_SIDEPANEL_WITH_ANNOTATION, STORAGE_UPDATED, type BackgroundBroadcastMessage, type OpenSidePanelPayload } from "~utils/messaging";
+import { CONTENT_LOCATE_ANNOTATION, CONTENT_OPEN_SIDEPANEL_WITH_ANNOTATION, CONTENT_REMOVE_ANNOTATION_OVERLAY, STORAGE_UPDATED, type BackgroundBroadcastMessage, type OpenSidePanelPayload } from "~utils/messaging";
 import { getSettings, patchSettings, type NsXSettings } from "~utils/settings";
 import { deleteAnnotationLocallyById, getAllAnnotations, getAnnotationById, normalizePageUrl, NSX_ANNOTATIONS_KEY, updateAnnotationById, updateAnnotationLocallyById, upsertAnnotation } from "~utils/storage";
 import { getAuthState } from "~utils/auth";
@@ -382,14 +382,38 @@ export default function SidePanel() {
   }
 
   const handleDeleteAnnotation = async (annotationId: string) => {
+    const annotation = await getAnnotationById(annotationId)
+    if (!annotation) {
+      setError("批注不存在或已被删除")
+      return
+    }
+
     try {
-      await deleteAnnotationFromQNote(annotationId)
+      // Local state and the current page are the immediate source of truth for
+      // the interaction. Do not keep a deleted annotation visible while a
+      // network request is still in flight.
       await deleteAnnotationLocallyById(annotationId)
       setItems((current) => current.filter((item) => item.id !== annotationId))
+
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+      if (
+        tab?.id &&
+        normalizePageUrl(tab.url || "") === normalizePageUrl(annotation.url)
+      ) {
+        await chrome.tabs.sendMessage(tab.id, {
+          type: CONTENT_REMOVE_ANNOTATION_OVERLAY,
+          annotationId
+        }).catch(() => undefined)
+      }
+
+      await deleteAnnotationFromQNote(annotationId, annotation.serverId)
       setSuccess("批注已删除")
     } catch (err) {
-      setError(err instanceof Error ? err.message : "删除批注失败")
-      throw err
+      setError(
+        err instanceof Error
+          ? `批注已从当前页面移除，但同步删除失败：${err.message}`
+          : "批注已从当前页面移除，但同步删除失败"
+      )
     }
   }
 
@@ -595,7 +619,7 @@ export default function SidePanel() {
           </div>
           {!isLoggedIn ? (
             <div className="mt-1 text-xs text-amber-800">
-              未登录：暂不能同步批注或创建行动
+              未登录：暂不能同步批注或创建任务
             </div>
           ) : null}
         </button>
@@ -607,7 +631,7 @@ export default function SidePanel() {
             {pending ? (
               <div className="mb-3 rounded border border-slate-200 bg-white p-3">
                 <div className="text-xs font-medium text-slate-500">
-                  待创建行动的批注
+                  待创建任务的批注
                 </div>
                 <div className="mt-1 line-clamp-2 text-sm text-slate-900">
                   {pending.selectedText}
@@ -867,7 +891,7 @@ export default function SidePanel() {
               void loadActionOptions()
             }}
             type="button">
-            {isLoggedIn ? "新建空白行动" : "先登录 QNote"}
+            {isLoggedIn ? "新建空白任务" : "先登录 QNote"}
           </button>
         </div>
       </div>
