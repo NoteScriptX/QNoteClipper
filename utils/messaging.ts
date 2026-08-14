@@ -63,7 +63,7 @@ export type ClipperCaptureAnnotationImageMessage = {
 }
 
 export type ContentCommandMessage =
-  | { type: typeof CONTENT_OPEN_SELECTION_CARD }
+  | { type: typeof CONTENT_OPEN_SELECTION_CARD; mode?: "highlight" | "underline" }
   | { type: typeof CONTENT_ACTIVATE_DRAW_MODE; mode: "line" | "box" }
   | { type: typeof CONTENT_LOCATE_ANNOTATION; annotationId: string }
 

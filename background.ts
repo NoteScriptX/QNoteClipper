@@ -117,6 +117,7 @@ const createContextMenus = () => {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({ id: "nsx-root", title: "NoteScript 批注", contexts: ["page", "selection"] })
     chrome.contextMenus.create({ id: "nsx-text", parentId: "nsx-root", title: "文字批注", contexts: ["selection"] })
+    chrome.contextMenus.create({ id: "nsx-underline", parentId: "nsx-root", title: "文字下划线", contexts: ["selection"] })
     chrome.contextMenus.create({ id: "nsx-line", parentId: "nsx-root", title: "手绘划线（一次）", contexts: ["page", "selection"] })
     chrome.contextMenus.create({ id: "nsx-box", parentId: "nsx-root", title: "框选批注（一次）", contexts: ["page", "selection"] })
   })
@@ -129,7 +130,9 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (!tab?.id) return
   const message = info.menuItemId === "nsx-text"
     ? { type: CONTENT_OPEN_SELECTION_CARD }
-    : info.menuItemId === "nsx-line"
+    : info.menuItemId === "nsx-underline"
+      ? { type: CONTENT_OPEN_SELECTION_CARD, mode: "underline" as const }
+      : info.menuItemId === "nsx-line"
       ? { type: CONTENT_ACTIVATE_DRAW_MODE, mode: "line" as const }
       : info.menuItemId === "nsx-box"
         ? { type: CONTENT_ACTIVATE_DRAW_MODE, mode: "box" as const }

@@ -504,7 +504,7 @@ export default function Content() {
     }
   }, [card.visible, captureAnnotationImage, refreshHighlights])
 
-  const onBubbleClick = useCallback(async () => {
+  const onBubbleClick = useCallback(async (mode: "highlight" | "underline" = "highlight") => {
     const selection = window.getSelection()
     if (!selection) return
     if (!selection.rangeCount) return
@@ -541,7 +541,7 @@ export default function Content() {
         context: fp.context
       },
       locateStatus: "ok",
-      mode: "highlight"
+      mode
     }
 
     selection.removeAllRanges()
@@ -555,12 +555,12 @@ export default function Content() {
   }, [bubble, url])
 
   useEffect(() => {
-    const listener = (message: { type?: string; mode?: "line" | "box"; annotationId?: string }) => {
+    const listener = (message: { type?: string; mode?: "line" | "box" | "highlight" | "underline"; annotationId?: string }) => {
       if (message.type === CONTENT_OPEN_SELECTION_CARD) {
-        void onBubbleClick()
+        void onBubbleClick(message.mode === "underline" ? "underline" : "highlight")
         return
       }
-      if (message.type === CONTENT_ACTIVATE_DRAW_MODE && message.mode) {
+      if (message.type === CONTENT_ACTIVATE_DRAW_MODE && (message.mode === "line" || message.mode === "box")) {
         setBubble({ visible: false })
         setCard({ visible: false })
         window.getSelection()?.removeAllRanges()
